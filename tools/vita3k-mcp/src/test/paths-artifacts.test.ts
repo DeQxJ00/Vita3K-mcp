@@ -13,7 +13,12 @@ test('repository path guard rejects traversal', () => {
 
 test('artifact store creates the required run manifest without credentials', async () => {
   const store = new ArtifactStore();
-  const record = await store.create({ titleId: 'TEST00001', appArgs: ['--example'] });
+  const record = await store.create({
+    titleId: 'TEST00001',
+    buildVersion: 'test-revision',
+    executable: 'C:\\repo\\build\\Vita3K.exe',
+    appArgs: ['--example'],
+  });
   try {
     assert.equal(isWithin(runsRoot, record.directory), true);
     await store.setPhase(record, 'running');
@@ -24,6 +29,7 @@ test('artifact store creates the required run manifest without credentials', asy
     const manifest = JSON.parse(manifestText) as Record<string, unknown>;
     assert.equal(manifest.phase, 'running');
     assert.equal(manifest.screenshotCount, 1);
+    assert.deepEqual(manifest.build, { version: 'test-revision', executable: 'C:\\repo\\build\\Vita3K.exe' });
     assert.equal(manifestText.includes('token'), false);
   } finally {
     await rm(record.directory, { recursive: true, force: true });

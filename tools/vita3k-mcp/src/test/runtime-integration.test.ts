@@ -28,7 +28,10 @@ test('fake Vita3K supports launch, status, screen, input, logs and shutdown', as
     assert.ok(path.isAbsolute(capture.path));
     assert.equal((await runtime.control('pause', session.id)).accepted, true);
     assert.equal((await runtime.status(session.id)).phase, 'paused');
-    assert.ok(runtime.getLogs(0).cursor >= 0);
+    const logs = runtime.getLogs(0, 'warn', 200, session.id);
+    assert.equal(logs.lines.some((line) => line.text.includes('fake warning')), true);
+    assert.equal(logs.lines.some((line) => line.text.includes('\u001b')), false);
+    assert.equal(runtime.getLogs(logs.cursor, 'warn', 200, session.id).lines.length, 0);
   } finally {
     await runtime.shutdown();
   }

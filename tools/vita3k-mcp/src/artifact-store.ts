@@ -15,6 +15,8 @@ export interface SessionRecord {
   updatedAt: string;
   titleId?: string;
   contentPath?: string;
+  buildVersion: string;
+  executable: string;
   appArgs: string[];
   screenshotCount: number;
   exitCode?: number | null;
@@ -26,7 +28,7 @@ function safeTimestamp(): string {
 }
 
 export class ArtifactStore {
-  async create(input: { titleId?: string; contentPath?: string; appArgs: string[] }): Promise<SessionRecord> {
+  async create(input: { titleId?: string; contentPath?: string; buildVersion: string; executable: string; appArgs: string[] }): Promise<SessionRecord> {
     const id = randomUUID();
     const relativeDirectory = `${safeTimestamp()}-${id}`;
     const directory = requireWithin(runsRoot, path.join(runsRoot, relativeDirectory));
@@ -42,6 +44,8 @@ export class ArtifactStore {
       updatedAt: now,
       ...(input.titleId ? { titleId: input.titleId } : {}),
       ...(input.contentPath ? { contentPath: input.contentPath } : {}),
+      buildVersion: input.buildVersion,
+      executable: input.executable,
       appArgs: input.appArgs,
       screenshotCount: 0,
       timeline: [{ at: now, phase: 'starting' }],
@@ -97,6 +101,10 @@ export class ArtifactStore {
       revision: session.revision,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
+      build: {
+        version: session.buildVersion,
+        executable: session.executable,
+      },
       app: {
         ...(session.titleId ? { titleId: session.titleId } : {}),
         ...(session.contentPath ? { contentPath: session.contentPath } : {}),

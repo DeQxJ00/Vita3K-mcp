@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
@@ -33,6 +33,14 @@ interface LogEntry {
 
 const ANSI_PATTERN = /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d/#&.:=?%@~_]+)*)?\u0007)|(?:(?:\d{1,4}(?:[;:]\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
 
+function repositoryRevision(): string {
+  try {
+    return execFileSync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: repoRoot, encoding: 'utf8', windowsHide: true }).trim();
+  } catch {
+    return 'unknown';
+  }
+}
+
 export class RuntimeManager {
   private child: ChildProcessWithoutNullStreams | undefined;
   private bridge: BridgeClient | undefined;
@@ -41,6 +49,8 @@ export class RuntimeManager {
   private logs: LogEntry[] = [];
   private logIndex = 0;
   private executableOverride: string | undefined;
+  private activeExecutable: string | undefined;
+  private readonly buildVersion = process.env.VITA3K_BUILD_VERSION ?? repositoryRevision();
 
   constructor(private readonly builds: BuildManager, private readonly options: RuntimeOptions = {}) {
     this.executableOverride = options.executable ?? process.env.VITA3K_EXECUTABLE;
@@ -67,7 +77,11 @@ export class RuntimeManager {
     }
     const previous = this.session;
     if (previous && input.replace) await this.stopCurrent('stopped');
-    this.session = await this.artifacts.create(input);
+    this.session = await this.artifacts.create({
+      ...input,
+      buildVersion: this.buildVersion,
+      executable: this.activeExecutable ?? 'unknown',
+    });
     await this.artifacts.setPhase(this.session, input.contentPath ? 'installing' : 'launching');
     try {
       await this.bridge!.request('app.launch', {
@@ -142,7 +156,8 @@ export class RuntimeManager {
     }
   }
 
-  getLogs(cursor = 0, minLevel = 'trace', limit = 200): { cursor: number; lines: LogEntry[] } {
+  getLogs(cursor = 0, minLevel = 'trace', limit = 200, sessionId?: string): { cursor: number; lines: LogEntry[] } {
+    if (sessionId) this.requireSession(sessionId);
     const levels = ['trace', 'debug', 'info', 'warn', 'error', 'critical'];
     const threshold = Math.max(0, levels.indexOf(minLevel));
     const start = Math.max(0, cursor);
@@ -193,6 +208,7 @@ export class RuntimeManager {
   private async ensureRuntime(): Promise<void> {
     if (this.child && this.bridge) return;
     const executable = await this.resolveExecutable();
+    this.activeExecutable = executable;
     const pipeName = `vita3k-mcp-${process.pid}-${randomBytes(8).toString('hex')}`;
     const token = randomBytes(32).toString('hex');
     const env = {
@@ -304,7 +320,9 @@ export class RuntimeManager {
       artifactDirectory: session.directory,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
+      uptimeMs: Math.max(0, Date.now() - Date.parse(session.createdAt)),
       exitCode: session.exitCode ?? null,
+      crash: session.phase === 'crashed' ? { exitCode: session.exitCode ?? null } : null,
       error: session.error ?? null,
     };
   }

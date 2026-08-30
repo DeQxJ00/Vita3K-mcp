@@ -169,8 +169,8 @@ function registerTools(server: McpServer): void {
       limit: z.number().int().min(1).max(1_000).default(200),
     }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  }, async ({ cursor, minLevel, limit }) => {
-    try { return success({ ok: true, ...runtime.getLogs(cursor, minLevel, limit) }); }
+  }, async ({ sessionId, cursor, minLevel, limit }) => {
+    try { return success({ ok: true, ...runtime.getLogs(cursor, minLevel, limit, sessionId) }); }
     catch (error) { return failure(error); }
   });
 

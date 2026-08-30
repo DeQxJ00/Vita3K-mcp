@@ -60,4 +60,5 @@ const server = net.createServer((socket) => {
   }
 });
 
+console.log('\u001b[31m|W| fake warning\u001b[0m');
 server.listen(endpoint);
