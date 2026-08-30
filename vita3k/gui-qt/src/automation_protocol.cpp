@@ -53,12 +53,26 @@ std::optional<ControllerState> make_controller_state(
     common("cross", SCE_CTRL_CROSS);
     common("square", SCE_CTRL_SQUARE);
     common("ps", SCE_CTRL_PSBUTTON);
-    if (contains("l1")) { state.buttons |= SCE_CTRL_L; state.buttons_ext |= SCE_CTRL_L1; }
-    if (contains("r1")) { state.buttons |= SCE_CTRL_R; state.buttons_ext |= SCE_CTRL_R1; }
-    if (contains("l2")) { state.buttons |= SCE_CTRL_L; state.buttons_ext |= SCE_CTRL_L2; }
-    if (contains("r2")) { state.buttons |= SCE_CTRL_R; state.buttons_ext |= SCE_CTRL_R2; }
-    if (contains("l3")) state.buttons_ext |= SCE_CTRL_L3;
-    if (contains("r3")) state.buttons_ext |= SCE_CTRL_R3;
+    if (contains("l1")) {
+        state.buttons |= SCE_CTRL_L;
+        state.buttons_ext |= SCE_CTRL_L1;
+    }
+    if (contains("r1")) {
+        state.buttons |= SCE_CTRL_R;
+        state.buttons_ext |= SCE_CTRL_R1;
+    }
+    if (contains("l2")) {
+        state.buttons |= SCE_CTRL_L;
+        state.buttons_ext |= SCE_CTRL_L2;
+    }
+    if (contains("r2")) {
+        state.buttons |= SCE_CTRL_R;
+        state.buttons_ext |= SCE_CTRL_R2;
+    }
+    if (contains("l3"))
+        state.buttons_ext |= SCE_CTRL_L3;
+    if (contains("r3"))
+        state.buttons_ext |= SCE_CTRL_R3;
     if (left) {
         state.axes[0] = static_cast<float>(std::clamp(left->x, -1.0, 1.0));
         state.axes[1] = static_cast<float>(std::clamp(left->y, -1.0, 1.0));

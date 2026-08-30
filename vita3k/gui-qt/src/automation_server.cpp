@@ -209,9 +209,9 @@ QJsonObject AutomationServer::dispatch(const QString &method, const QJsonObject 
             { QStringLiteral("title"), QString::fromStdString(m_emuenv.current_app_title) },
             { QStringLiteral("fps"), static_cast<int>(m_emuenv.fps) },
             { QStringLiteral("resolution"), QJsonObject{
-                { QStringLiteral("width"), m_emuenv.display.sce_frame.image_size.x },
-                { QStringLiteral("height"), m_emuenv.display.sce_frame.image_size.y },
-            } },
+                                                { QStringLiteral("width"), m_emuenv.display.sce_frame.image_size.x },
+                                                { QStringLiteral("height"), m_emuenv.display.sce_frame.image_size.y },
+                                            } },
         };
         if (!m_operation_error.isEmpty())
             result.insert(QStringLiteral("error"), m_operation_error);

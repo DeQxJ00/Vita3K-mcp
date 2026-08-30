@@ -67,6 +67,7 @@ struct SettingsCommitResult;
 class MainWindow final : public QMainWindow {
     Q_OBJECT
     friend class AutomationServer;
+
 public:
     explicit MainWindow(EmuEnvState &emuenv,
         std::shared_ptr<GuiSettings> gui_settings,

@@ -1,7 +1,7 @@
 #pragma once
 
-#include <QObject>
 #include <QByteArray>
+#include <QObject>
 #include <QString>
 
 #include <cstdint>
