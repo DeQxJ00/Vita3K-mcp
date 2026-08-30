@@ -203,14 +203,24 @@ QJsonObject AutomationServer::dispatch(const QString &method, const QJsonObject 
     }
     if (method == QStringLiteral("session.status")) {
         const QString phase = currentPhase();
+        DisplayFrameInfo rendered_frame;
+        {
+            std::lock_guard<std::mutex> lock(m_emuenv.display.display_info_mutex);
+            rendered_frame = m_emuenv.display.next_rendered_frame;
+        }
+        const bool frame_ready = static_cast<bool>(rendered_frame.base)
+            && rendered_frame.pitch > 0
+            && rendered_frame.image_size.x > 0
+            && rendered_frame.image_size.y > 0;
         QJsonObject result{
             { QStringLiteral("phase"), phase },
             { QStringLiteral("titleId"), QString::fromStdString(m_emuenv.io.title_id) },
             { QStringLiteral("title"), QString::fromStdString(m_emuenv.current_app_title) },
             { QStringLiteral("fps"), static_cast<int>(m_emuenv.fps) },
+            { QStringLiteral("frameReady"), frame_ready },
             { QStringLiteral("resolution"), QJsonObject{
-                                                { QStringLiteral("width"), m_emuenv.display.sce_frame.image_size.x },
-                                                { QStringLiteral("height"), m_emuenv.display.sce_frame.image_size.y },
+                                                { QStringLiteral("width"), rendered_frame.image_size.x },
+                                                { QStringLiteral("height"), rendered_frame.image_size.y },
                                             } },
         };
         if (!m_operation_error.isEmpty())
@@ -224,8 +234,8 @@ QJsonObject AutomationServer::dispatch(const QString &method, const QJsonObject 
         uint32_t width = 0;
         uint32_t height = 0;
         if (!save_current_app_frame_png(m_emuenv, fs_utils::utf8_to_path(target.toStdString()), width, height))
-            throw std::runtime_error("Failed to capture the current application frame.");
-        return { { QStringLiteral("path"), target }, { QStringLiteral("width"), static_cast<int>(width) }, { QStringLiteral("height"), static_cast<int>(height) } };
+            return { { QStringLiteral("captured"), false } };
+        return { { QStringLiteral("captured"), true }, { QStringLiteral("path"), target }, { QStringLiteral("width"), static_cast<int>(width) }, { QStringLiteral("height"), static_cast<int>(height) } };
     }
     if (method == QStringLiteral("input.set")) {
         std::vector<std::string> button_names;

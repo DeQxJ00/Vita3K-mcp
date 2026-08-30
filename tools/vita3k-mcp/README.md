@@ -14,6 +14,14 @@ To validate the sidecar without downloading Qt or building Vita3K:
 npm test --prefix tools/vita3k-mcp
 ```
 
+After a local build, run the reusable real-emulator smoke workflow with an installed homebrew Title ID:
+
+```powershell
+npm --prefix tools/vita3k-mcp run smoke:real -- --title-id STSVDEMO1
+```
+
+The smoke workflow waits for a capturable frame, validates MCP image content, exercises pause, front touch, controller input, restart, resume, stop, and graceful shutdown, and leaves its evidence in `.vita3k-mcp/runs/`.
+
 After reopening/trusting the project in Codex, the `vita3k` MCP service is available automatically. A typical tool sequence is:
 
 1. `build_start`, then `build_status` until terminal.

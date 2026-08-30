@@ -20,6 +20,7 @@
 
 #include "module/load_module.h"
 
+#include <algorithm>
 #include <config/state.h>
 #include <ctime>
 #include <ctrl/state.h>
@@ -36,6 +37,9 @@
 #include <packages/vci.h>
 #include <renderer/state.h>
 #include <renderer/texture_cache.h>
+
+#include <limits>
+#include <mutex>
 
 #include <miniz.h>
 #include <pugixml.hpp>
@@ -559,7 +563,32 @@ static std::vector<uint32_t> get_current_app_frame(EmuEnvState &emuenv, uint32_t
     // Dump the current frame from the emulator display
     std::vector<uint32_t> frame = emuenv.renderer->dump_frame(emuenv.display, width, height);
     if (frame.empty() || (frame.size() != (width * height))) {
-        return {};
+        // CPU-backed framebuffers are uploaded straight from guest memory and do
+        // not have a renderer surface-cache entry. Preserve screenshot support
+        // for those applications by copying the displayed guest buffer.
+        DisplayFrameInfo display_frame;
+        {
+            std::lock_guard<std::mutex> lock(emuenv.display.display_info_mutex);
+            display_frame = emuenv.display.next_rendered_frame;
+        }
+
+        if (!display_frame.base || display_frame.pitch == 0 || display_frame.image_size.x <= 0 || display_frame.image_size.y <= 0
+            || display_frame.pitch < static_cast<uint32_t>(display_frame.image_size.x))
+            return {};
+
+        width = static_cast<uint32_t>(display_frame.image_size.x);
+        height = static_cast<uint32_t>(display_frame.image_size.y);
+        const uint64_t source_size = static_cast<uint64_t>(display_frame.pitch) * height * sizeof(uint32_t);
+        const uint64_t source_end = static_cast<uint64_t>(display_frame.base.address()) + source_size;
+        constexpr uint64_t max_raw_frame_size = 128ULL * 1024 * 1024;
+        if (source_size == 0 || source_size > max_raw_frame_size || source_end > std::numeric_limits<Address>::max()
+            || !is_valid_addr_range(emuenv.mem, display_frame.base.address(), static_cast<Address>(source_end)))
+            return {};
+
+        const auto *source = reinterpret_cast<const uint32_t *>(display_frame.base.get(emuenv.mem));
+        frame.resize(static_cast<size_t>(width) * height);
+        for (uint32_t row = 0; row < height; ++row)
+            std::copy_n(source + static_cast<size_t>(row) * display_frame.pitch, width, frame.data() + static_cast<size_t>(row) * width);
     }
 
     // Force alpha channel to 255 (fully opaque) for every pixel

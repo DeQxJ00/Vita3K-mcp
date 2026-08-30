@@ -211,3 +211,5 @@ const close = async (): Promise<void> => {
 };
 process.once('SIGINT', () => { void close().finally(() => process.exit(0)); });
 process.once('SIGTERM', () => { void close().finally(() => process.exit(0)); });
+process.stdin.once('end', () => { void close().finally(() => process.exit(0)); });
+process.stdin.once('close', () => { void close().finally(() => process.exit(0)); });

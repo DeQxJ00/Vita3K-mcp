@@ -89,12 +89,16 @@ export class ArtifactStore {
   }
 
   nextScreenshot(session: SessionRecord): { absolute: string; relativeToRuns: string } {
-    session.screenshotCount += 1;
-    const name = `${String(session.screenshotCount).padStart(4, '0')}.png`;
+    const name = `${String(session.screenshotCount + 1).padStart(4, '0')}.png`;
     return {
       absolute: requireWithin(session.directory, path.join(session.directory, 'screenshots', name)),
       relativeToRuns: path.join(session.relativeDirectory, 'screenshots', name),
     };
+  }
+
+  async recordScreenshot(session: SessionRecord): Promise<void> {
+    session.screenshotCount += 1;
+    await this.persist(session);
   }
 
   async persist(session: SessionRecord): Promise<void> {

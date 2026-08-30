@@ -11,6 +11,7 @@ const artifactDirectory = artifactRoot;
 const endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\${pipeName}` : pipeName;
 let phase = 'idle';
 let titleId = '';
+let frameReadyAt = 0;
 
 // A valid 1x1 transparent PNG.
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+Xx8WAAAAAElFTkSuQmCC', 'base64');
@@ -42,6 +43,7 @@ const server = net.createServer((socket) => {
         titleId = String(params.titleId ?? 'FAKE00001');
         phase = 'running';
         const appArgs = params.appArgs as string[] | undefined;
+        frameReadyAt = appArgs?.includes('--delay-frame') ? Date.now() + 250 : 0;
         if (appArgs?.includes('--crash')) setTimeout(() => process.exit(9), 80);
         if (appArgs?.includes('--fail')) phase = 'failed';
       } else if (request.method === 'session.status') result = {
@@ -49,7 +51,8 @@ const server = net.createServer((socket) => {
         titleId,
         title: 'Fake Homebrew',
         fps: 60,
-        resolution: { width: 960, height: 544 },
+        frameReady: Date.now() >= frameReadyAt,
+        resolution: Date.now() >= frameReadyAt ? { width: 960, height: 544 } : { width: 0, height: 0 },
         ...(phase === 'failed' ? { error: 'synthetic launch failure' } : {}),
       };
       else if (request.method === 'session.pause') phase = params.paused ? 'paused' : 'running';

@@ -50,6 +50,7 @@ export class RuntimeManager {
   private logIndex = 0;
   private executableOverride: string | undefined;
   private activeExecutable: string | undefined;
+  private exitRecordPromise: Promise<void> = Promise.resolve();
   private readonly buildVersion = process.env.VITA3K_BUILD_VERSION ?? repositoryRevision();
 
   constructor(private readonly builds: BuildManager, private readonly options: RuntimeOptions = {}) {
@@ -128,10 +129,18 @@ export class RuntimeManager {
   async capture(sessionId: string): Promise<{ data: string; path: string; width: number; height: number }> {
     const session = this.requireSession(sessionId);
     if (!this.bridge || !['running', 'paused'].includes(session.phase)) throw new Vita3kError('NO_ACTIVE_SESSION', 'A running or paused application is required for capture.');
+    await this.waitForFrame(session);
     const target = this.artifacts.nextScreenshot(session);
-    const result = await this.bridge.request('screen.capture', { relativePath: target.relativeToRuns }, 30_000);
-    await this.artifacts.persist(session);
+    const deadline = Date.now() + 30_000;
+    let result: Record<string, unknown> = {};
+    while (Date.now() < deadline) {
+      result = await this.bridge.request('screen.capture', { relativePath: target.relativeToRuns }, 30_000);
+      if (result.captured !== false) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (result.captured === false) throw new Vita3kError('FRAME_NOT_READY', 'The rendered frame could not be read within 30 seconds.', true);
     const data = await readFile(target.absolute);
+    await this.artifacts.recordScreenshot(session);
     return { data: data.toString('base64'), path: target.absolute, width: Number(result.width ?? 0), height: Number(result.height ?? 0) };
   }
 
@@ -171,7 +180,7 @@ export class RuntimeManager {
 
   async control(action: 'pause' | 'resume' | 'restart' | 'stop' | 'shutdown', sessionId?: string): Promise<Record<string, unknown>> {
     if (action === 'shutdown') {
-      if (this.bridge) await this.bridge.request('emulator.shutdown').catch(() => {});
+      await this.shutdown();
       return { action, accepted: true };
     }
     const session = this.requireSession(sessionId);
@@ -191,13 +200,16 @@ export class RuntimeManager {
 
   async shutdown(): Promise<void> {
     const child = this.child;
+    const exited = child && child.exitCode === null
+      ? new Promise<void>((resolve) => child.once('exit', () => resolve()))
+      : Promise.resolve();
     try {
       await this.bridge?.request('input.clear', {}, 1_000).catch(() => {});
       await this.bridge?.request('touch.clear', {}, 1_000).catch(() => {});
       await this.bridge?.request('emulator.shutdown', {}, 2_000).catch(() => {});
       if (child && child.exitCode === null) {
         await Promise.race([
-          new Promise<void>((resolve) => child.once('exit', () => resolve())),
+          exited,
           new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
         ]);
       }
@@ -205,6 +217,8 @@ export class RuntimeManager {
       this.bridge?.close();
       this.bridge = undefined;
       if (child && child.exitCode === null && !child.killed) child.kill();
+      await Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, 2_000))]);
+      await this.exitRecordPromise;
       this.child = undefined;
     }
   }
@@ -222,6 +236,7 @@ export class RuntimeManager {
       VITA3K_MCP_ARTIFACT_ROOT: runsRoot,
     };
     const child: ChildProcessWithoutNullStreams = spawn(executable, this.options.args ?? [], { cwd: path.dirname(executable), env, windowsHide: false, stdio: 'pipe' });
+    this.exitRecordPromise = Promise.resolve();
     child.stdin.end();
     this.child = child;
     this.consumeStream(child.stdout, 'stdout');
@@ -231,7 +246,7 @@ export class RuntimeManager {
       this.child = undefined;
       this.bridge?.close();
       this.bridge = undefined;
-      if (active) void this.artifacts.setExit(active, code === 0 ? 'exited' : 'crashed', code);
+      this.exitRecordPromise = active ? this.artifacts.setExit(active, code === 0 ? 'exited' : 'crashed', code) : Promise.resolve();
     });
     child.once('error', (error) => this.addLog('stderr', `Failed to start Vita3K: ${error.message}`));
     const bridge = new BridgeClient(pipeName, token);
@@ -263,6 +278,21 @@ export class RuntimeManager {
       if (matches.length) return matches[0]!;
     }
     throw new Vita3kError('BINARY_NOT_FOUND', 'No Vita3K.exe was found. Run build_start first or set VITA3K_EXECUTABLE.');
+  }
+
+  private async waitForFrame(session: SessionRecord, timeoutMs = 30_000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const state = await this.bridge!.request('session.status');
+      const resolution = state.resolution as { width?: unknown; height?: unknown } | undefined;
+      if (state.frameReady === true && Number(resolution?.width ?? 0) > 0 && Number(resolution?.height ?? 0) > 0) return;
+      const phase = this.normalizePhase(String(state.phase ?? session.phase));
+      if (!['running', 'paused'].includes(phase)) {
+        throw new Vita3kError('NO_ACTIVE_SESSION', `Session stopped before a frame became available (phase: ${phase}).`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Vita3kError('FRAME_NOT_READY', 'The application did not produce a capturable frame within 30 seconds.', true);
   }
 
   private consumeStream(stream: NodeJS.ReadableStream, source: 'stdout' | 'stderr'): void {
@@ -319,6 +349,7 @@ export class RuntimeManager {
       title: bridge.title ?? null,
       paused: session.phase === 'paused',
       fps: bridge.fps ?? 0,
+      frameReady: bridge.frameReady ?? false,
       resolution: bridge.resolution ?? null,
       processId: this.child?.pid ?? null,
       artifactDirectory: session.directory,

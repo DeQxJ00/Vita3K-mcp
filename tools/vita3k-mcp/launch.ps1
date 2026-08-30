@@ -8,10 +8,9 @@ $toolRoot = Join-Path $repoRoot '.tools'
 $localNode = Join-Path $toolRoot 'node\node.exe'
 $localNpm = Join-Path $toolRoot 'node\npm.cmd'
 $ensureScript = Join-Path $serverDir 'scripts\ensure-toolchain.ps1'
-$systemPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 
 if (-not (Test-Path -LiteralPath $localNode)) {
-    $systemNode = Get-Command node -ErrorAction SilentlyContinue
+    $systemNode = Get-Command node.exe -ErrorAction SilentlyContinue
     $major = 0
     if ($systemNode) {
         $versionText = & $systemNode.Source --version
@@ -20,7 +19,8 @@ if (-not (Test-Path -LiteralPath $localNode)) {
         }
     }
     if (-not $systemNode -or $major -ne 24) {
-        & $systemPowerShell -NoProfile -ExecutionPolicy Bypass -File $ensureScript -RepoRoot $repoRoot -Components Node 1>&2
+        & $ensureScript -RepoRoot $repoRoot -Components Node 2>&1 |
+            ForEach-Object { [Console]::Error.WriteLine($_) }
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
 }
@@ -29,8 +29,8 @@ if (Test-Path -LiteralPath $localNode) {
     $nodeExe = $localNode
     $npmExe = $localNpm
 } else {
-    $nodeExe = (Get-Command node -ErrorAction Stop).Source
-    $npmExe = (Get-Command npm -ErrorAction Stop).Source
+    $nodeExe = (Get-Command node.exe -ErrorAction Stop).Source
+    $npmExe = (Get-Command npm.cmd -ErrorAction Stop).Source
 }
 
 $distEntry = Join-Path $serverDir 'dist\index.js'
@@ -43,7 +43,8 @@ if (-not (Test-Path -LiteralPath $packageLock)) {
 $needsInstall = -not (Test-Path -LiteralPath $installedLock) -or
     (Get-Item -LiteralPath $packageLock).LastWriteTimeUtc -gt (Get-Item -LiteralPath $installedLock).LastWriteTimeUtc
 if ($needsInstall) {
-    & $npmExe ci --prefix $serverDir --cache (Join-Path $toolRoot 'cache\npm') --no-audit --no-fund 1>&2
+    & $npmExe ci --prefix $serverDir --cache (Join-Path $toolRoot 'cache\npm') --no-audit --no-fund 2>&1 |
+        ForEach-Object { [Console]::Error.WriteLine($_) }
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
@@ -55,7 +56,8 @@ if (-not $needsBuild) {
     $needsBuild = @($sourceFiles | Where-Object { $_.LastWriteTimeUtc -gt $distTime }).Count -gt 0
 }
 if ($needsBuild) {
-    & $npmExe run build --prefix $serverDir 1>&2
+    & $npmExe run build --prefix $serverDir 2>&1 |
+        ForEach-Object { [Console]::Error.WriteLine($_) }
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
