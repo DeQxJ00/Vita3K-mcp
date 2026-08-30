@@ -112,7 +112,11 @@ export class BuildManager {
       await this.requireDiskSpace();
 
       this.update(job, 'configuring', `Configuring windows-vs2022${reconfigure ? ' (forced)' : ''}`);
-      await this.runProcess(job, cmake, ['--preset', 'windows-vs2022', '-DUSE_DISCORD_RICH_PRESENCE=OFF'], env);
+      await this.runProcess(job, cmake, [
+        '--preset', 'windows-vs2022',
+        '-DUSE_DISCORD_RICH_PRESENCE=OFF',
+        `-DCMAKE_GENERATOR_INSTANCE=${msvcEnv.VITA3K_MSVC_INSTALLATION}`,
+      ], env);
 
       this.update(job, 'building', `Building vita3k (${job.configuration})`);
       const preset = `windows-vs2022-${job.configuration.toLowerCase()}`;
@@ -164,6 +168,7 @@ export class BuildManager {
         environment[name] = line.slice(equals + 1);
       }
     }
+    environment.VITA3K_MSVC_INSTALLATION = installationPath;
     this.update(job, undefined, `Using existing MSVC at ${installationPath}`);
     return environment;
   }

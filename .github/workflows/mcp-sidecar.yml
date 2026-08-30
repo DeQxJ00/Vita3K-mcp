@@ -31,7 +31,7 @@ permissions:
 
 jobs:
   windows-local-toolchain:
-    runs-on: windows-2025
+    runs-on: windows-2022
     timeout-minutes: 120
     env:
       npm_config_cache: ${{ github.workspace }}\.tools\cache\npm
