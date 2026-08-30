@@ -70,3 +70,11 @@ jobs:
           $binary = Get-ChildItem -LiteralPath build/windows-vs2022 -Filter Vita3K.exe -File -Recurse | Select-Object -First 1
           if (-not $binary) { throw 'Vita3K.exe was not produced.' }
           Write-Host $binary.FullName
+
+      - name: Upload runnable Vita3K package
+        uses: actions/upload-artifact@v4
+        with:
+          name: vita3k-mcp-windows-${{ github.sha }}
+          path: build/windows-vs2022/bin/RelWithDebInfo/
+          if-no-files-found: error
+          retention-days: 3
