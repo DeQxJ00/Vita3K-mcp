@@ -115,6 +115,8 @@ export class BuildManager {
         '--preset', 'windows-vs2022',
         '-DUSE_DISCORD_RICH_PRESENCE=OFF',
         `-DCMAKE_GENERATOR_INSTANCE=${msvcEnv.VITA3K_MSVC_INSTALLATION}`,
+        `-DOPENSSL_ROOT_DIR=${path.join(repoRoot, 'build', 'windows-vs2022', 'external', 'openssl', 'x64')}`,
+        '-DOPENSSL_USE_STATIC_LIBS=ON',
       ], env);
 
       this.update(job, 'building', `Building vita3k (${job.configuration})`);
