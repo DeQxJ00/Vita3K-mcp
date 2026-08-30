@@ -54,3 +54,19 @@ test('a crashed fake process is recorded and the bridge can restart', async () =
     await runtime.shutdown();
   }
 });
+
+test('an asynchronous Vita3K launch failure is returned as structured session state', async () => {
+  const runtime = new RuntimeManager(fakeBuilds as never, {
+    executable: process.execPath,
+    args: [fakeExecutable],
+    bridgeConnectTimeoutMs: 5_000,
+  });
+  try {
+    const session = await runtime.launch({ titleId: 'FAKE00001', appArgs: ['--fail'], replace: false });
+    const status = await runtime.status(session.id);
+    assert.equal(status.phase, 'failed');
+    assert.deepEqual(status.error, { code: 'VITA3K_SESSION_FAILED', message: 'synthetic launch failure' });
+  } finally {
+    await runtime.shutdown();
+  }
+});

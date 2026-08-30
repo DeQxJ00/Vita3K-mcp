@@ -107,7 +107,11 @@ export class RuntimeManager {
         try {
           const state = await this.bridge.request('session.status');
           const phase = this.normalizePhase(String(state.phase ?? 'idle'));
-          if (phase !== session.phase) await this.artifacts.setPhase(session, phase);
+          if (phase === 'failed' && typeof state.error === 'string' && state.error) {
+            if (session.error?.message !== state.error) await this.artifacts.setFailure(session, 'VITA3K_SESSION_FAILED', state.error);
+          } else if (phase !== session.phase) {
+            await this.artifacts.setPhase(session, phase);
+          }
           if (typeof state.titleId === 'string' && state.titleId) session.titleId = state.titleId;
           await this.artifacts.persist(session);
           if (afterRevision === undefined || session.revision > afterRevision || waitMs === 0) return this.snapshot(session, state);

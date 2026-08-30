@@ -43,7 +43,15 @@ const server = net.createServer((socket) => {
         phase = 'running';
         const appArgs = params.appArgs as string[] | undefined;
         if (appArgs?.includes('--crash')) setTimeout(() => process.exit(9), 80);
-      } else if (request.method === 'session.status') result = { phase, titleId, title: 'Fake Homebrew', fps: 60, resolution: { width: 960, height: 544 } };
+        if (appArgs?.includes('--fail')) phase = 'failed';
+      } else if (request.method === 'session.status') result = {
+        phase,
+        titleId,
+        title: 'Fake Homebrew',
+        fps: 60,
+        resolution: { width: 960, height: 544 },
+        ...(phase === 'failed' ? { error: 'synthetic launch failure' } : {}),
+      };
       else if (request.method === 'session.pause') phase = params.paused ? 'paused' : 'running';
       else if (request.method === 'session.restart') phase = 'running';
       else if (request.method === 'session.stop') phase = 'stopped';
