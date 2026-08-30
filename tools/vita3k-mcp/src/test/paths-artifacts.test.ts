@@ -25,6 +25,8 @@ test('artifact store creates the required run manifest without credentials', asy
     const screenshot = store.nextScreenshot(record);
     await store.persist(record);
     assert.match(screenshot.absolute, /screenshots[\\/]0001\.png$/);
+    assert.equal((await readFile(path.join(record.directory, 'vita3k.log'), 'utf8')), '');
+    assert.equal((await readFile(path.join(record.directory, 'stderr.log'), 'utf8')), '');
     const manifestText = await readFile(path.join(record.directory, 'manifest.json'), 'utf8');
     const manifest = JSON.parse(manifestText) as Record<string, unknown>;
     assert.equal(manifest.phase, 'running');

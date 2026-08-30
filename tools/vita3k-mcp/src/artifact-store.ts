@@ -33,6 +33,10 @@ export class ArtifactStore {
     const relativeDirectory = `${safeTimestamp()}-${id}`;
     const directory = requireWithin(runsRoot, path.join(runsRoot, relativeDirectory));
     await mkdir(path.join(directory, 'screenshots'), { recursive: true });
+    await Promise.all([
+      writeFile(path.join(directory, 'vita3k.log'), '', 'utf8'),
+      writeFile(path.join(directory, 'stderr.log'), '', 'utf8'),
+    ]);
     const now = new Date().toISOString();
     const session: SessionRecord = {
       id,
