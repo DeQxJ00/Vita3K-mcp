@@ -24,6 +24,8 @@ test('provisioner is repository-local and never invokes global installers or per
   const script = await readFile(path.join(serverRoot, 'scripts', 'ensure-toolchain.ps1'), 'utf8');
   assert.match(script, /Assert-LocalPath/);
   assert.match(script, /\.tools|toolRoot/i);
+  assert.match(script, /archiveSha256/);
+  assert.match(script, /qmakeSha256/);
   assert.doesNotMatch(script, /setx\b|VisualStudio\.Installer|Start-Process|winget\b|choco\b|npm\s+(?:i|install)\s+-g|pip\s+install\s+--user/i);
   assert.equal(path.dirname(toolRoot), repoRoot);
 });

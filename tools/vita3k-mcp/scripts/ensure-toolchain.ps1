@@ -63,7 +63,21 @@ function Get-VerifiedArchive([string]$Name, [string]$Url, [string]$Sha256) {
 function Install-ZipTool([string]$Component, [object]$Info, [string]$ExecutableRelativePath) {
     $target = Assert-LocalPath (Join-Path $toolRoot $Component.ToLowerInvariant())
     $executable = Join-Path $target $ExecutableRelativePath
-    if (Test-Path -LiteralPath $executable) { return }
+    $markerPath = Join-Path $target '.vita3k-tool.json'
+    $valid = $false
+    if ((Test-Path -LiteralPath $executable) -and (Test-Path -LiteralPath $markerPath)) {
+        try {
+            $marker = Get-Content -Raw -LiteralPath $markerPath | ConvertFrom-Json
+            $valid = ([string]$marker.archiveSha256 -eq ([string]$Info.sha256).ToLowerInvariant()) -and
+                ([string]$marker.executableSha256 -eq (Get-Sha256 $executable))
+            if ($Component -eq 'Node') {
+                $valid = $valid -and (Test-Path -LiteralPath (Join-Path $target 'npm.cmd'))
+            }
+        } catch {
+            $valid = $false
+        }
+    }
+    if ($valid) { return }
     $archiveName = [System.IO.Path]::GetFileName([string]$Info.url)
     $archive = Get-VerifiedArchive $archiveName ([string]$Info.url) ([string]$Info.sha256)
     $staging = Assert-LocalPath (Join-Path $toolRoot ('.staging-' + $Component.ToLowerInvariant() + '-' + [guid]::NewGuid().ToString('N')))
@@ -83,12 +97,39 @@ function Install-ZipTool([string]$Component, [object]$Info, [string]$ExecutableR
         if (Test-Path -LiteralPath $staging) { Remove-Item -Recurse -Force -LiteralPath $staging }
     }
     if (-not (Test-Path -LiteralPath $executable)) { throw "$Component archive did not contain $ExecutableRelativePath" }
+    [ordered]@{
+        component = $Component
+        version = [string]$Info.version
+        archiveSha256 = ([string]$Info.sha256).ToLowerInvariant()
+        executableSha256 = Get-Sha256 $executable
+    } | ConvertTo-Json | Set-Content -LiteralPath $markerPath -Encoding UTF8
 }
 
 function Install-Qt {
     $qtRoot = Assert-LocalPath (Join-Path $toolRoot 'qt')
     $qtTarget = Join-Path $qtRoot (Join-Path ([string]$lock.qt.version) 'msvc2022_64')
-    if (Test-Path -LiteralPath (Join-Path $qtTarget 'bin\qmake.exe')) { return }
+    $qtMarker = Join-Path $qtTarget '.vita3k-tool.json'
+    $qmake = Join-Path $qtTarget 'bin\qmake.exe'
+    $requiredQtFiles = @(
+        'bin\qmake.exe',
+        'bin\windeployqt.exe',
+        'lib\cmake\Qt6\Qt6Config.cmake',
+        'lib\cmake\Qt6Svg\Qt6SvgConfig.cmake',
+        'lib\cmake\Qt6Multimedia\Qt6MultimediaConfig.cmake',
+        'lib\cmake\Qt6LinguistTools\Qt6LinguistToolsConfig.cmake'
+    )
+    $expectedFingerprints = @($lock.qt.archives | ForEach-Object { "$($_.name):$(([string]$_.sha256).ToLowerInvariant())" })
+    $qtValid = $false
+    if ((Test-Path -LiteralPath $qtMarker) -and -not @($requiredQtFiles | Where-Object { -not (Test-Path -LiteralPath (Join-Path $qtTarget $_)) })) {
+        try {
+            $marker = Get-Content -Raw -LiteralPath $qtMarker | ConvertFrom-Json
+            $qtValid = ([string]$marker.qmakeSha256 -eq (Get-Sha256 $qmake)) -and
+                -not (Compare-Object $expectedFingerprints @($marker.archiveFingerprints))
+        } catch {
+            $qtValid = $false
+        }
+    }
+    if ($qtValid) { return }
 
     $python = Get-Command python -ErrorAction SilentlyContinue
     if (-not $python) { throw 'MISSING_PYTHON: Python is required only to create the repository-local aqt environment.' }
@@ -116,6 +157,12 @@ function Install-Qt {
         $versionRoot = Join-Path $qtRoot ([string]$lock.qt.version)
         New-Item -ItemType Directory -Force -Path $versionRoot | Out-Null
         Move-Item -LiteralPath $stagedTarget -Destination $qtTarget
+        [ordered]@{
+            component = 'Qt'
+            version = [string]$lock.qt.version
+            archiveFingerprints = $expectedFingerprints
+            qmakeSha256 = Get-Sha256 (Join-Path $qtTarget 'bin\qmake.exe')
+        } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $qtTarget '.vita3k-tool.json') -Encoding UTF8
     } finally {
         if (Test-Path -LiteralPath $staging) { Remove-Item -Recurse -Force -LiteralPath $staging }
     }

@@ -93,6 +93,7 @@ export class BuildManager {
   private async run(job: BuildJob, reconfigure: boolean): Promise<void> {
     try {
       const msvcEnv = await this.requireMsvc(job);
+      await this.requireDiskSpace();
       const ensureScript = path.join(serverRoot, 'scripts', 'ensure-toolchain.ps1');
       await this.runProcess(job, this.powershell, [
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ensureScript,
@@ -108,8 +109,6 @@ export class BuildManager {
         Qt6_ROOT: qtRoot,
         PATH: `${path.join(qtRoot, 'bin')};${path.join(toolRoot, 'cmake', 'bin')};${msvcEnv.PATH ?? ''}`,
       };
-
-      await this.requireDiskSpace();
 
       this.update(job, 'configuring', `Configuring windows-vs2022${reconfigure ? ' (forced)' : ''}`);
       await this.runProcess(job, cmake, [

@@ -35,13 +35,26 @@ if (Test-Path -LiteralPath $localNode) {
 
 $distEntry = Join-Path $serverDir 'dist\index.js'
 $packageLock = Join-Path $serverDir 'package-lock.json'
-if (-not (Test-Path -LiteralPath $distEntry)) {
-    if (-not (Test-Path -LiteralPath $packageLock)) {
-        Write-Error 'package-lock.json is missing; run npm install in tools/vita3k-mcp during development.'
-        exit 2
-    }
+$installedLock = Join-Path $serverDir 'node_modules\.package-lock.json'
+if (-not (Test-Path -LiteralPath $packageLock)) {
+    Write-Error 'package-lock.json is missing; restore the repository file before starting the MCP server.'
+    exit 2
+}
+$needsInstall = -not (Test-Path -LiteralPath $installedLock) -or
+    (Get-Item -LiteralPath $packageLock).LastWriteTimeUtc -gt (Get-Item -LiteralPath $installedLock).LastWriteTimeUtc
+if ($needsInstall) {
     & $npmExe ci --prefix $serverDir --cache (Join-Path $toolRoot 'cache\npm') --no-audit --no-fund 1>&2
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
+$sourceFiles = @(Get-ChildItem -LiteralPath (Join-Path $serverDir 'src') -Filter '*.ts' -File -Recurse)
+$sourceFiles += Get-Item -LiteralPath (Join-Path $serverDir 'tsconfig.json')
+$needsBuild = -not (Test-Path -LiteralPath $distEntry)
+if (-not $needsBuild) {
+    $distTime = (Get-Item -LiteralPath $distEntry).LastWriteTimeUtc
+    $needsBuild = @($sourceFiles | Where-Object { $_.LastWriteTimeUtc -gt $distTime }).Count -gt 0
+}
+if ($needsBuild) {
     & $npmExe run build --prefix $serverDir 1>&2
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
