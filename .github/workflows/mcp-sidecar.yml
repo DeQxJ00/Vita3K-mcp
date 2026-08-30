@@ -38,6 +38,7 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 120
     env:
+      CMAKE_BUILD_PARALLEL_LEVEL: '4'
       npm_config_cache: ${{ github.workspace }}\.tools\cache\npm
       NPM_CONFIG_UPDATE_NOTIFIER: 'false'
     steps:
