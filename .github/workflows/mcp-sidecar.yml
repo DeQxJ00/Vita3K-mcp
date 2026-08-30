@@ -29,6 +29,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: codex-mcp-windows-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   windows-local-toolchain:
     runs-on: windows-2022
