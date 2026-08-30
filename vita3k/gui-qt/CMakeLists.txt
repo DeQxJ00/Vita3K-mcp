@@ -1,5 +1,7 @@
 add_library(gui-qt STATIC
     src/main_window.cpp
+    src/automation_server.cpp
+    src/automation_protocol.cpp
     src/about_dialog.cpp
     src/archive_install_dialog.cpp
     src/controls_dialog.cpp
@@ -41,6 +43,8 @@ add_library(gui-qt STATIC
     src/welcome_dialog.ui
 
     include/gui-qt/main_window.h
+    include/gui-qt/automation_server.h
+    include/gui-qt/automation_protocol.h
     include/gui-qt/about_dialog.h
     include/gui-qt/archive_install_dialog.h
     include/gui-qt/controls_dialog.h
@@ -126,4 +130,17 @@ target_link_libraries(gui-qt PUBLIC
 target_include_directories(gui-qt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 if (TRACY_ENABLE_ON_CORE_COMPONENTS)
 	target_link_libraries(gui-qt PRIVATE tracy)
+endif()
+
+if(NOT ANDROID)
+    add_executable(gui-qt-automation-tests
+        tests/automation_protocol_tests.cpp
+        src/automation_protocol.cpp
+    )
+    target_include_directories(gui-qt-automation-tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/../ctrl/include
+    )
+    target_link_libraries(gui-qt-automation-tests PRIVATE googletest util)
+    add_test(NAME gui-qt-automation COMMAND gui-qt-automation-tests)
 endif()

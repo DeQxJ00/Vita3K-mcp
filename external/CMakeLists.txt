@@ -304,10 +304,16 @@ if(NOT OPENSSL_FOUND OR FORCE_BUILD_OPENSSL_MAC)
 				EXPECTED_HASH SHA256=b83e202841fc163f9fe18bbbd1e90e69117bf37cc41e1116701729c0c3bcd0b3)
 		endif()
 
-		if(NOT EXISTS "${CMAKE_BINARY_DIR}/external/openssl")
+		# A failed download can leave an empty directory behind. Check an actual
+		# payload file so the next configure repairs the staging directory.
+		if(NOT EXISTS "${CMAKE_BINARY_DIR}/external/openssl/x64/include/openssl/ssl.h")
 			file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/external/openssl")
 			execute_process(COMMAND ${CMAKE_COMMAND} -E tar xf "${CMAKE_BINARY_DIR}/external/openssl.zip"
-				WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/external/openssl")
+				WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/external/openssl"
+				RESULT_VARIABLE OPENSSL_EXTRACT_RESULT)
+			if(NOT OPENSSL_EXTRACT_RESULT EQUAL 0)
+				message(FATAL_ERROR "Failed to extract the prebuilt OpenSSL archive")
+			endif()
 		endif()
 
 		set(OPENSSL_ROOT_DIR "${CMAKE_BINARY_DIR}/external/openssl/x64" CACHE STRING "Path to OpenSSL root")

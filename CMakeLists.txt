@@ -135,13 +135,15 @@ endmacro(b2_build)
 # Macro to compile Boost
 macro(boost_compile)
 	list(TRANSFORM BOOST_MODULES_TO_FIND PREPEND --with- OUTPUT_VARIABLE b2_cmd_line_common)
-	set(b2_cmd_line_common ${b2} ${b2_cmd_line_common} -j${CPU_COUNT} --build-dir=${BOOST_INSTALLDIR} --stagedir=${BOOST_INSTALLDIR} cxxflags=${BOOST_CXX_FLAGS})
+	# -a repairs stale configuration checks left by a previously interrupted
+	# configure (notably one started outside a VS developer environment).
+	set(b2_cmd_line_common ${b2} ${b2_cmd_line_common} -a -j${CPU_COUNT} --build-dir=${BOOST_INSTALLDIR} --stagedir=${BOOST_INSTALLDIR} cxxflags=${BOOST_CXX_FLAGS})
 	set(Boost_USE_DEBUG_RUNTIME "")
 	if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
 		execute_process(
 			COMMAND ${b2_cmd_line_common} address-model=64 --architecture=x64 toolset=${BOOST_TOOLSET} variant=debug,release stage
 			WORKING_DIRECTORY ${BOOST_SOURCEDIR}
-			OUTPUT_QUIET
+			RESULT_VARIABLE BOOST_BUILD_RESULT
 		)
 	elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
 		execute_process(
@@ -155,6 +157,9 @@ macro(boost_compile)
 			WORKING_DIRECTORY ${BOOST_SOURCEDIR}
 			OUTPUT_QUIET
 		)
+	endif()
+	if(NOT BOOST_BUILD_RESULT EQUAL 0)
+		message(FATAL_ERROR "Boost build failed with exit code ${BOOST_BUILD_RESULT}")
 	endif()
 endmacro(boost_compile)
 
@@ -188,8 +193,15 @@ macro(get_boost)
 			set(BOOST_INCLUDEDIR "${BOOST_SOURCEDIR}")                      # find_package(Boost ...) hint
 			set(BOOST_LIBRARYDIR "${BOOST_INSTALLDIR}/lib")                 # find_package(Boost ...) hint
 
-			# Find Boost again to check for a existing compilation of the custom distribution
-			find_package(Boost 1.81 COMPONENTS ${BOOST_MODULES_TO_FIND} PATHS ${BOOST_INSTALLDIR} NO_DEFAULT_PATH)
+			# An interrupted b2 run can leave only a top-level BoostConfig.cmake.
+			# Do not let that incomplete staging prevent the fallback build from repairing it.
+			file(GLOB BOOST_FILESYSTEM_CONFIG
+				"${BOOST_INSTALLDIR}/lib/cmake/boost_filesystem-*/boost_filesystem-config.cmake")
+			if(BOOST_FILESYSTEM_CONFIG)
+				find_package(Boost 1.81 COMPONENTS ${BOOST_MODULES_TO_FIND} PATHS ${BOOST_INSTALLDIR} NO_DEFAULT_PATH)
+			else()
+				set(Boost_FOUND FALSE)
+			endif()
 
 			# If no build of the custom distribution is found, compile it
 			if(NOT Boost_FOUND)

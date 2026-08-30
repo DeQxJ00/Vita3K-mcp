@@ -32,3 +32,4 @@ ExitCode run_app(EmuEnvState &emuenv, int32_t main_module_id);
 ExitCode run_app(EmuEnvState &emuenv, int32_t main_module_id, const AppLaunchRequest &launch_request);
 void toggle_texture_replacement(EmuEnvState &emuenv);
 void take_screenshot(EmuEnvState &emuenv);
+bool save_current_app_frame_png(EmuEnvState &emuenv, const fs::path &path, uint32_t &width, uint32_t &height);

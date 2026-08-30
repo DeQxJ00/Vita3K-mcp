@@ -60,6 +60,10 @@ You can download the latest builds from [here](https://github.com/Vita3K/Vita3K/
 
 Please see [`building.md`](./building.md).
 
+### Codex interactive testing
+
+This fork includes a repository-local STDIO MCP sidecar for the Windows build/test loop. See [`tools/vita3k-mcp/README.md`](./tools/vita3k-mcp/README.md). Its portable CMake, Qt, Node fallback, Python environment, caches, npm dependencies, build outputs, logs, and captures remain inside this repository; only an existing Visual Studio 2022 C++ toolchain and Windows SDK are reused.
+
 ## Running
 Check our [quickstart guide](https://vita3k.org/quickstart) to make sure your computer meets the minimum requirements to run Vita3K.  
 Don't forget to have your graphics driver up to date and to install the [Visual C++ 2015-2022 Redistributable](https://aka.ms/vs/17/release/VC_redist.x64.exe) if you are a Windows user.  

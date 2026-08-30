@@ -15,6 +15,11 @@ build
 # CMake user presets
 CMakeUserPresets.json
 compile_commands.json
+.tools/
+.vita3k-mcp/
+tools/vita3k-mcp/node_modules/
+tools/vita3k-mcp/dist/
+tools/vita3k-mcp/coverage/
 # AppImage builder
 appimage/linuxdeploy*.AppImage
 /.gdbinit

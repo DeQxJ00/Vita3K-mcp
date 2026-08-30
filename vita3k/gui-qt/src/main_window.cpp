@@ -21,6 +21,7 @@
 #include <gui-qt/apps_list.h>
 #include <gui-qt/apps_list_context_menu.h>
 #include <gui-qt/archive_install_dialog.h>
+#include <gui-qt/automation_server.h>
 #include <gui-qt/controls_dialog.h>
 #include <gui-qt/ctrl_keyboard_filter.h>
 #include <gui-qt/debug_widget.h>
@@ -155,7 +156,14 @@ MainWindow::MainWindow(EmuEnvState &emuenv,
     , m_gui_settings(std::move(gui_settings))
     , m_persistent_settings(std::move(persistent_settings))
     , m_admin_privileged(admin_privileged) {
+    m_automation_mode = !qEnvironmentVariable("VITA3K_MCP_PIPE").isEmpty()
+        && !qEnvironmentVariable("VITA3K_MCP_TOKEN").isEmpty();
     initialize();
+    if (m_automation_mode) {
+        m_automation_server = std::make_unique<AutomationServer>(*this, emuenv, this);
+        if (!m_automation_server->start())
+            LOG_ERROR("Failed to start the MCP automation bridge.");
+    }
 }
 
 MainWindow::~MainWindow() {
@@ -218,7 +226,7 @@ void MainWindow::closeEvent(QCloseEvent *event) {
         ? m_gui_settings->get_value(gui::mw_confirmExitApp).toBool()
         : true;
 
-    if (m_game_window && confirm_exit_app) {
+    if (m_game_window && confirm_exit_app && !m_automation_mode) {
         QMessageBox box(this);
         box.setIcon(QMessageBox::Question);
         box.setWindowTitle(tr("Exit App?"));
@@ -544,12 +552,12 @@ void MainWindow::initialize() {
     init_first_run_stylesheet();
     apply_stylesheet();
 
-    if (emuenv.cfg.show_welcome) {
+    if (emuenv.cfg.show_welcome && !m_automation_mode) {
         WelcomeDialog welcome(emuenv, false, nullptr);
         welcome.exec();
     }
 
-    if (m_update_manager) {
+    if (m_update_manager && !m_automation_mode) {
         const auto startup_mode = static_cast<UpdateStartupMode>(emuenv.cfg.check_for_updates_mode);
         if (startup_mode != UPDATE_STARTUP_OFF) {
             QTimer::singleShot(0, this, [this, startup_mode]() {
@@ -627,6 +635,8 @@ void MainWindow::on_install_finished() {
 }
 
 bool MainWindow::prompt_startup_warnings() {
+    if (m_automation_mode)
+        return true;
     return prompt_admin_privileges_warning_if_needed();
 }
 
@@ -900,7 +910,7 @@ void MainWindow::boot_game(const AppLaunchRequest &launch_request, const bool pr
 
 std::optional<AppLaunchRequest> MainWindow::boot_game_once(const AppLaunchRequest &launch_request, const bool prompt_before_closing_existing) {
     if (m_game_window) {
-        if (prompt_before_closing_existing) {
+        if (prompt_before_closing_existing && !m_automation_mode) {
             const int result = QMessageBox::question(this, tr("Switch App?"),
                 tr("An app is already running.\n"
                    "Do you want to close it and launch another app?\n\n"
@@ -914,7 +924,7 @@ std::optional<AppLaunchRequest> MainWindow::boot_game_once(const AppLaunchReques
         on_game_closed();
     }
 
-    if (launch_request.reason != AppLaunchReason::LoadExec && !confirm_missing_firmware_warning())
+    if (launch_request.reason != AppLaunchReason::LoadExec && !m_automation_mode && !confirm_missing_firmware_warning())
         return std::nullopt;
 
     refresh_controllers(emuenv.ctrl, emuenv);
@@ -923,8 +933,10 @@ std::optional<AppLaunchRequest> MainWindow::boot_game_once(const AppLaunchReques
 
     const bool update_last_time_used = launch_request.reason != AppLaunchReason::LoadExec && !m_live_area_widget;
     if (!m_app_session.begin_launch(launch_request, update_last_time_used)) {
-        QMessageBox::critical(this, tr("Error"),
-            tr("Could not find app '%1' in apps list.").arg(QString::fromStdString(launch_request.app_path)));
+        if (!m_automation_mode) {
+            QMessageBox::critical(this, tr("Error"),
+                tr("Could not find app '%1' in apps list.").arg(QString::fromStdString(launch_request.app_path)));
+        }
         return std::nullopt;
     }
     if (m_theme_manager)
@@ -965,7 +977,10 @@ std::optional<AppLaunchRequest> MainWindow::boot_game_once(const AppLaunchReques
         this, &MainWindow::on_game_closed);
 
     const auto abort_boot = [&](const QString &msg) {
-        QMessageBox::critical(this, tr("Error"), msg);
+        if (!m_automation_mode)
+            QMessageBox::critical(this, tr("Error"), msg);
+        else
+            LOG_ERROR("MCP app launch failed: {}", msg.toStdString());
         m_app_session.stop(app::AppSessionStopReason::LaunchFailure);
         if (m_theme_manager)
             m_theme_manager->set_vita_theme_bgm_blocked(false);

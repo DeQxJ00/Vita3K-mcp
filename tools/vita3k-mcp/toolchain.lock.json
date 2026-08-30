@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "cmake": {
+    "version": "4.3.3",
+    "url": "https://github.com/Kitware/CMake/releases/download/v4.3.3/cmake-4.3.3-windows-x86_64.zip",
+    "sha256": "935ade9e5e8723583c07f44c5592cea2a1c8f65c56ca7e07b34c025c880e0bd6"
+  },
+  "node": {
+    "version": "24.13.0",
+    "url": "https://nodejs.org/dist/v24.13.0/node-v24.13.0-win-x64.zip",
+    "sha256": "ca2742695be8de44027d71b3f53a4bdb36009b95575fe1ae6f7f0b5ce091cb88"
+  },
+  "buildDependencies": {
+    "openssl": {
+      "name": "openssl-4.0.1.zip",
+      "url": "https://download.firedaemon.com/FireDaemon-OpenSSL/openssl-4.0.1.zip",
+      "sha256": "b83e202841fc163f9fe18bbbd1e90e69117bf37cc41e1116701729c0c3bcd0b3"
+    }
+  },
+  "qt": {
+    "version": "6.11.0",
+    "architecture": "win64_msvc2022_64",
+    "aqtinstallVersion": "3.3.0",
+    "repository": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/",
+    "archives": [
+      { "name": "qtbase.7z", "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6110/qt6_6110_msvc2022_64/qt.qt6.6110.win64_msvc2022_64/6.11.0-0-202603180535qtbase-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z", "sha256": "ba0e343cb8aa067f04d6f2e54a60d911660df0aac5cf9f096f1a8a98467f8614" },
+      { "name": "qtsvg.7z", "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6110/qt6_6110_msvc2022_64/qt.qt6.6110.win64_msvc2022_64/6.11.0-0-202603180535qtsvg-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z", "sha256": "4ae1f65cb2404d92635358ab166e33b5876c537f231c4cacbaa0517f19523a8c" },
+      { "name": "qtdeclarative.7z", "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6110/qt6_6110_msvc2022_64/qt.qt6.6110.win64_msvc2022_64/6.11.0-0-202603180535qtdeclarative-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z", "sha256": "b4da442317a2d7a2bc932a3ec5b4742c19b672d1a7db5bff4793b0abd15c0f69" },
+      { "name": "qttools.7z", "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6110/qt6_6110_msvc2022_64/qt.qt6.6110.win64_msvc2022_64/6.11.0-0-202603180535qttools-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z", "sha256": "c39deba90733d58df38034277a83c521e0a7df9d4f08d6c21b5662dd726ac259" },
+      { "name": "qttranslations.7z", "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6110/qt6_6110_msvc2022_64/qt.qt6.6110.win64_msvc2022_64/6.11.0-0-202603180535qttranslations-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z", "sha256": "3f846b010fe4acc6a20fb129287b982a37e966fffd59c77cc1864d602f2e00b5" },
+      { "name": "d3dcompiler_47-x64.7z", "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6110/qt6_6110_msvc2022_64/qt.qt6.6110.win64_msvc2022_64/6.11.0-0-202603180535d3dcompiler_47-x64.7z", "sha256": "4027cbf9a7ecc77432b6ba378b80f63c983c00a3b03dec3ea1399c5d63c6f6a3" },
+      { "name": "opengl32sw.7z", "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6110/qt6_6110_msvc2022_64/qt.qt6.6110.win64_msvc2022_64/6.11.0-0-202603180535opengl32sw-64-mesa_11_2_2-signed_sha256.7z", "sha256": "9c42108153815738fb06c898d18b344e5e66da998c7d30eb4a962581718c558e" },
+      { "name": "qtmultimedia.7z", "url": "https://download.qt.io/online/qtsdkrepository/windows_x86/desktop/qt6_6110/qt6_6110_msvc2022_64/qt.qt6.6110.addons.qtmultimedia.win64_msvc2022_64/6.11.0-0-202603180535qtmultimedia-Windows-Windows_11_24H2-MSVC2022-Windows-Windows_11_24H2-X86_64.7z", "sha256": "b182c7194a4753687ea64b44e908eb79c1496eb874d895c0cfeeaec6096b73b8" }
+    ]
+  }
+}

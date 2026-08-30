@@ -128,14 +128,15 @@ void refresh_controllers(CtrlState &state, EmuEnvState &emuenv) {
 }
 
 static void apply_keyboard(uint32_t *buttons, float axes[4], bool ext, EmuEnvState &emuenv) {
-    const auto &kb = emuenv.ctrl.keyboard_state;
-    const uint32_t kb_buttons = ext ? kb.buttons_ext : kb.buttons;
-
-    *buttons |= kb_buttons;
-    axes[0] += kb.axes[0];
-    axes[1] += kb.axes[1];
-    axes[2] += kb.axes[2];
-    axes[3] += kb.axes[3];
+    const auto apply_state = [&](const VirtualKeyboardState &state) {
+        *buttons |= ext ? state.buttons_ext : state.buttons;
+        axes[0] += state.axes[0];
+        axes[1] += state.axes[1];
+        axes[2] += state.axes[2];
+        axes[3] += state.axes[3];
+    };
+    apply_state(emuenv.ctrl.keyboard_state);
+    apply_state(emuenv.ctrl.automation_state);
 }
 
 static std::array<ControllerBinding, 13> get_controller_bindings(EmuEnvState &emuenv) {

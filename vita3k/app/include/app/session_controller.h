@@ -55,6 +55,7 @@ public:
     bool has_active_session() const;
     bool is_running() const;
     bool is_paused() const;
+    AppSessionPhase phase() const;
 
     bool begin_launch(const AppLaunchRequest &launch_request, bool update_last_time_used = true);
     bool initialize_renderer(renderer::FrameHost &frame);

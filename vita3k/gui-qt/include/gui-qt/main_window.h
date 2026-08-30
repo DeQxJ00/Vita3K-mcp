@@ -59,12 +59,14 @@ class ControlsDialog;
 class SettingsDialog;
 class ThemeManager;
 class VitaThemesDialog;
+class AutomationServer;
 namespace app {
 struct SettingsCommitResult;
 }
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
+    friend class AutomationServer;
 public:
     explicit MainWindow(EmuEnvState &emuenv,
         std::shared_ptr<GuiSettings> gui_settings,
@@ -175,6 +177,7 @@ private:
     std::shared_ptr<GuiSettings> m_gui_settings;
     std::shared_ptr<PersistentSettings> m_persistent_settings;
     std::unique_ptr<ThemeManager> m_theme_manager;
+    std::unique_ptr<AutomationServer> m_automation_server;
 
     QMainWindow *m_dock_host = nullptr;
     AppsList *m_apps_list_widget = nullptr;
@@ -212,6 +215,7 @@ private:
     bool m_fullscreen = false;
     bool m_app_selected = false;
     bool m_admin_privileged = false;
+    bool m_automation_mode = false;
 #if USE_DISCORD
     bool m_discord_rich_presence_old = false;
 #endif

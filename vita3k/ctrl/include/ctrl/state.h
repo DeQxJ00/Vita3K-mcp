@@ -74,6 +74,9 @@ struct CtrlState {
     uint64_t last_vcount[5] = {}; // sceCtrl ports.
 
     VirtualKeyboardState keyboard_state;
+    // Kept separate from physical keyboard input so an automation client can
+    // release its own state without clobbering keys held by the user.
+    VirtualKeyboardState automation_state;
 
     std::atomic<bool> overlay_input_intercepted{ false };
 
@@ -93,6 +96,7 @@ struct CtrlState {
         input_mode_ext = SCE_CTRL_MODE_DIGITAL;
         std::fill_n(last_vcount, 5, 0);
         keyboard_state = {};
+        automation_state = {};
         overlay_input_intercepted.store(false, std::memory_order_relaxed);
         overlay_mouse.x.store(0.f, std::memory_order_relaxed);
         overlay_mouse.y.store(0.f, std::memory_order_relaxed);

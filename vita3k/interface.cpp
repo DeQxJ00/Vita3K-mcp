@@ -570,6 +570,18 @@ static std::vector<uint32_t> get_current_app_frame(EmuEnvState &emuenv, uint32_t
     return frame;
 }
 
+bool save_current_app_frame_png(EmuEnvState &emuenv, const fs::path &path, uint32_t &width, uint32_t &height) {
+    if (emuenv.io.title_id.empty() || !emuenv.renderer)
+        return false;
+
+    auto frame = get_current_app_frame(emuenv, width, height);
+    if (frame.empty())
+        return false;
+
+    fs::create_directories(path.parent_path());
+    return stbi_write_png(fs_utils::path_to_utf8(path).c_str(), width, height, 4, frame.data(), width * 4) == 1;
+}
+
 void take_screenshot(EmuEnvState &emuenv) {
     if (emuenv.cfg.screenshot_format == None)
         return;

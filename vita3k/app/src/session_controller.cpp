@@ -48,6 +48,10 @@ bool AppSessionController::is_paused() const {
     return active_pause_reasons.load(std::memory_order_acquire) != 0;
 }
 
+AppSessionPhase AppSessionController::phase() const {
+    return current_phase.load(std::memory_order_acquire);
+}
+
 bool AppSessionController::begin_launch(const AppLaunchRequest &launch_request, const bool update_last_time_used) {
     std::lock_guard<std::mutex> lock(mutex);
     const AppSessionPhase phase = current_phase.load(std::memory_order_relaxed);
