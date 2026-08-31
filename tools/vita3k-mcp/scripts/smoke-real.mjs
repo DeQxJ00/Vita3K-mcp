@@ -61,11 +61,12 @@ try {
     console.log(JSON.stringify(launched, null, 2));
     const sessionId = launched.sessionId;
     let status;
+    let revision = 0;
     for (let attempt = 0; attempt < 120; attempt += 1) {
-      status = await call('session_status', { sessionId, waitMs: 1_000 });
+      status = await call('session_status', { sessionId, afterRevision: revision, waitMs: 1_000 });
+      revision = Number(status.revision ?? revision);
       if (status.phase === 'running' && status.frameReady === true) break;
       if (['failed', 'crashed', 'exited'].includes(status.phase)) break;
-      await new Promise((resolve) => setTimeout(resolve, 5));
     }
     console.log(JSON.stringify(status, null, 2));
     if (status?.phase !== 'running' || status.frameReady !== true) throw new Error(`Application did not reach a capturable running state: ${status?.phase ?? 'unknown'}`);
@@ -78,8 +79,10 @@ try {
     await call('touch', { sessionId, port: 'front', points: [{ x: 0.5, y: 0.5 }], durationMs: 50 });
     await call('send_input', { sessionId, buttons: ['start'], durationMs: 100 });
     await call('control_session', { sessionId, action: 'restart' });
+    revision = Number(status.revision ?? revision);
     for (let attempt = 0; attempt < 120; attempt += 1) {
-      status = await call('session_status', { sessionId, waitMs: 1_000 });
+      status = await call('session_status', { sessionId, afterRevision: revision, waitMs: 1_000 });
+      revision = Number(status.revision ?? revision);
       if (status.phase === 'running') break;
       if (['failed', 'crashed', 'exited'].includes(status.phase)) throw new Error(`Restart failed: ${status.phase}`);
     }

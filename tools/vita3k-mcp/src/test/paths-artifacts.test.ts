@@ -22,11 +22,17 @@ test('artifact store creates the required run manifest without credentials', asy
   try {
     assert.equal(isWithin(runsRoot, record.directory), true);
     await store.setPhase(record, 'running');
+    const stdoutLines = Array.from({ length: 2_000 }, (_, index) => `stdout-${index}`);
+    const stderrLines = Array.from({ length: 2_000 }, (_, index) => `stderr-${index}`);
+    await Promise.all([
+      ...stdoutLines.map((line) => store.appendStdout(record, line)),
+      ...stderrLines.map((line) => store.appendStderr(record, line)),
+    ]);
     const screenshot = store.nextScreenshot(record);
     await store.recordScreenshot(record);
     assert.match(screenshot.absolute, /screenshots[\\/]0001\.png$/);
-    assert.equal((await readFile(path.join(record.directory, 'vita3k.log'), 'utf8')), '');
-    assert.equal((await readFile(path.join(record.directory, 'stderr.log'), 'utf8')), '');
+    assert.deepEqual((await readFile(path.join(record.directory, 'vita3k.log'), 'utf8')).trimEnd().split('\n'), stdoutLines);
+    assert.deepEqual((await readFile(path.join(record.directory, 'stderr.log'), 'utf8')).trimEnd().split('\n'), stderrLines);
     const manifestText = await readFile(path.join(record.directory, 'manifest.json'), 'utf8');
     const manifest = JSON.parse(manifestText) as Record<string, unknown>;
     assert.equal(manifest.phase, 'running');

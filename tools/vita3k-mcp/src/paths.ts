@@ -5,9 +5,9 @@ import { fileURLToPath } from 'node:url';
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 export const serverRoot = path.resolve(moduleDir, '..');
-export const repoRoot = path.resolve(serverRoot, '..', '..');
-export const toolRoot = path.join(repoRoot, '.tools');
-export const stateRoot = path.join(repoRoot, '.vita3k-mcp');
+export const repoRoot = path.resolve(process.env.VITA3K_MCP_REPO_ROOT ?? path.resolve(serverRoot, '..', '..'));
+export const toolRoot = path.resolve(process.env.VITA3K_MCP_TOOL_ROOT ?? path.join(repoRoot, '.tools'));
+export const stateRoot = path.resolve(process.env.VITA3K_MCP_STATE_ROOT ?? path.join(repoRoot, '.vita3k-mcp'));
 export const runsRoot = path.join(stateRoot, 'runs');
 
 export function isWithin(parent: string, child: string): boolean {

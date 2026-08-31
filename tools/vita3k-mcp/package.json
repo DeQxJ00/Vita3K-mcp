@@ -11,7 +11,8 @@
     "ci:build": "npm run build && node dist/ci-build.js",
     "smoke:real": "npm run build && node scripts/smoke-real.mjs",
     "test": "npm run build && node --test dist/test/*.test.js",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "start:http": "node dist/http.js"
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.0.0",
