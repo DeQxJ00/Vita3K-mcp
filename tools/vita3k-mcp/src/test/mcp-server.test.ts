@@ -20,6 +20,11 @@ test('stdio MCP server advertises the complete Vita3K test workflow', async () =
       'build_start', 'build_status', 'capture_screen', 'control_session', 'get_logs',
       'launch_app', 'list_apps', 'send_input', 'session_status', 'touch',
     ]);
+    for (const name of ['send_input', 'touch']) {
+      const tool = tools.tools.find((candidate) => candidate.name === name);
+      const duration = (tool?.inputSchema as { properties?: { durationMs?: { maximum?: number } } }).properties?.durationMs;
+      assert.equal(duration?.maximum, 60_000);
+    }
     const invalid = await client.callTool({ name: 'build_status', arguments: { buildId: '00000000-0000-0000-0000-000000000000' } });
     assert.equal(invalid.isError, true);
   } finally {

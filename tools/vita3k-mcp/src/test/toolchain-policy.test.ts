@@ -29,3 +29,16 @@ test('provisioner is repository-local and never invokes global installers or per
   assert.doesNotMatch(script, /setx\b|VisualStudio\.Installer|Start-Process|winget\b|choco\b|npm\s+(?:i|install)\s+-g|pip\s+install\s+--user/i);
   assert.equal(path.dirname(toolRoot), repoRoot);
 });
+
+test('HTTP deployment remains inside the selected Vita3K directory and uses local production dependencies', async () => {
+  const deploy = await readFile(path.join(serverRoot, 'scripts', 'deploy-http.ps1'), 'utf8');
+  const start = await readFile(path.join(serverRoot, 'portable', 'Start-MCP.ps1'), 'utf8');
+  assert.match(deploy, /Join-Path \$DestinationRoot 'mcp'/);
+  assert.match(deploy, /\.tools\\node/);
+  assert.match(deploy, /ci --omit=dev --prefix \$serverTarget/);
+  assert.match(deploy, /http-token\.txt[\s\S]+Remove-Item/);
+  assert.match(start, /VITA3K_MCP_TOOL_ROOT/);
+  assert.match(start, /VITA3K_MCP_STATE_ROOT/);
+  assert.match(start, /Start-Process.+-WindowStyle Hidden/s);
+  assert.doesNotMatch(`${deploy}\n${start}`, /setx\b|VisualStudio\.Installer|winget\b|choco\b|npm\s+(?:i|install)\s+-g|pip\s+install\s+--user|0\.0\.0\.0/i);
+});

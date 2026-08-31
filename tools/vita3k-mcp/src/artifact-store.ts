@@ -28,6 +28,8 @@ function safeTimestamp(): string {
 }
 
 export class ArtifactStore {
+  private readonly logWriteQueues = new Map<string, Promise<void>>();
+
   async create(input: { titleId?: string; contentPath?: string; buildVersion: string; executable: string; appArgs: string[] }): Promise<SessionRecord> {
     const id = randomUUID();
     const relativeDirectory = `${safeTimestamp()}-${id}`;
@@ -80,12 +82,22 @@ export class ArtifactStore {
 
   async appendStdout(session: SessionRecord | undefined, line: string): Promise<void> {
     if (!session) return;
-    await appendFile(path.join(session.directory, 'vita3k.log'), line + '\n', 'utf8');
+    await this.appendLog(path.join(session.directory, 'vita3k.log'), line);
   }
 
   async appendStderr(session: SessionRecord | undefined, line: string): Promise<void> {
     if (!session) return;
-    await appendFile(path.join(session.directory, 'stderr.log'), line + '\n', 'utf8');
+    await this.appendLog(path.join(session.directory, 'stderr.log'), line);
+  }
+
+  private appendLog(file: string, line: string): Promise<void> {
+    const previous = this.logWriteQueues.get(file) ?? Promise.resolve();
+    const write = previous.catch(() => {}).then(() => appendFile(file, line + '\n', 'utf8'));
+    this.logWriteQueues.set(file, write);
+    void write.finally(() => {
+      if (this.logWriteQueues.get(file) === write) this.logWriteQueues.delete(file);
+    }).catch(() => {});
+    return write;
   }
 
   nextScreenshot(session: SessionRecord): { absolute: string; relativeToRuns: string } {

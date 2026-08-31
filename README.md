@@ -62,7 +62,7 @@ Please see [`building.md`](./building.md).
 
 ### Codex interactive testing
 
-This fork includes a repository-local STDIO MCP sidecar for the Windows build/test loop. See [`tools/vita3k-mcp/README.md`](./tools/vita3k-mcp/README.md). Its portable CMake, Qt, Node fallback, Python environment, caches, npm dependencies, build outputs, logs, and captures remain inside this repository; only an existing Visual Studio 2022 C++ toolchain and Windows SDK are reused.
+This fork includes a repository-local STDIO MCP sidecar and a loopback-only Streamable HTTP deployment for the Windows build/test loop. See [`tools/vita3k-mcp/README.md`](./tools/vita3k-mcp/README.md) or the [Chinese usage guide](./docs/codex-mcp-usage.zh-CN.md). Its portable CMake, Qt, Node, Python environment, caches, npm dependencies, build outputs, logs, and captures remain inside the repository or the selected Vita3K deployment; only an existing Visual Studio 2022 C++ toolchain and Windows SDK are reused.
 
 ## Running
 Check our [quickstart guide](https://vita3k.org/quickstart) to make sure your computer meets the minimum requirements to run Vita3K.  
