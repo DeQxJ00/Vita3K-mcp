@@ -17,6 +17,8 @@
 
 #include <display/functions.h>
 
+#include <cheat/functions.h>
+#include <ctrl/functions.h>
 #include <dialog/state.h>
 #include <display/state.h>
 #include <emuenv/state.h>
@@ -34,17 +36,28 @@ static constexpr int64_t TARGET_MICRO_PER_FRAME = 1000000LL / TARGET_FPS;
 // how many cycles do we need to see before we start predicting the next frame
 static constexpr int predict_threshold = 3;
 static constexpr int max_expected_swapchain_size = 6;
+// The bit of the first display head in its vblank event
+static constexpr SceUInt32 VBLANK_EVENT_BIT = 0x1;
 
 static void vblank_sync_thread(EmuEnvState &emuenv) {
     DisplayState &display = emuenv.display;
 
+    const cheat::JitInvalidate invalidate_jit = [&emuenv](uint32_t address, size_t size) {
+        emuenv.kernel.invalidate_jit_cache(address, size);
+    };
+
     while (!display.abort.load()) {
         {
-            const std::lock_guard<std::mutex> guard(display.mutex);
+            // Before the count goes up, so a read that waited for this vblank gets its samples
+            touch_vsync_update(emuenv);
+            refresh_motion(emuenv.motion, emuenv.ctrl);
 
+            bool has_frame = false;
             {
                 const std::lock_guard<std::mutex> guard_info(display.display_info_mutex);
                 ++display.vblank_count;
+
+                has_frame = static_cast<bool>(display.sce_frame.base);
 
                 // in this case, even though no new game frames are being rendered, we still need to update the screen
                 if (emuenv.kernel.is_threads_paused() || (emuenv.common_dialog.status == SCE_COMMON_DIALOG_STATUS_RUNNING))
@@ -55,25 +68,17 @@ static void vblank_sync_thread(EmuEnvState &emuenv) {
                         emuenv.renderer->should_display = true;
             }
 
-            // maybe we should also use a mutex for this part, but it shouldn't be an issue
-            touch_vsync_update(emuenv);
-            refresh_motion(emuenv.motion, emuenv.ctrl);
+            if (has_frame)
+                emuenv.cheat.count_frame();
 
-            // Notify Vblank callback in each VBLANK start
-            for (auto &[_, cb] : display.vblank_callbacks)
-                cb->event_notify(cb->get_notifier_id());
+            // Cheat codes are re-applied on every vblank, the same way the Vita cheat plugins do.
+            // The pad is read here rather than taken from the game, which may stop reading it while a button is held.
+            cheat::set_buttons(emuenv.cheat, ctrl_peek_buttons(emuenv, 1));
+            cheat::apply(emuenv.cheat, emuenv.mem, invalidate_jit);
 
-            for (std::size_t i = 0; i < display.vblank_wait_infos.size();) {
-                auto &vblank_wait_info = display.vblank_wait_infos[i];
-                if (vblank_wait_info.target_vcount <= display.vblank_count) {
-                    ThreadStatePtr target_wait = vblank_wait_info.target_thread;
-
-                    target_wait->update_status(ThreadStatus::run);
-                    display.vblank_wait_infos.erase(display.vblank_wait_infos.begin() + i);
-                } else {
-                    i++;
-                }
-            }
+            // Wakes the display waits and notifies the vblank start callbacks
+            if (const SimpleEventRef event = emuenv.kernel.kernel_objects.find<SimpleEvent>(display.vblank_event))
+                event->pulse_and_notify(VBLANK_EVENT_BIT, 0);
         }
         const auto time_ms = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
         const auto time_left = TARGET_MICRO_PER_FRAME - (time_ms % TARGET_MICRO_PER_FRAME);
@@ -82,41 +87,44 @@ static void vblank_sync_thread(EmuEnvState &emuenv) {
 }
 
 void start_sync_thread(EmuEnvState &emuenv) {
+    // The kernel owns the event, in the table no guest UID reaches
+    emuenv.display.vblank_event = emuenv.kernel.kernel_objects.add(SimpleEventRef::make(0, "SceDisplayVblank", 0, 0), emuenv.kernel.get_next_uid());
     emuenv.display.vblank_thread = std::make_unique<std::thread>(vblank_sync_thread, std::ref(emuenv));
 }
 
-void wait_vblank(DisplayState &display, KernelState &kernel, const ThreadStatePtr &wait_thread, const uint64_t target_vcount, const bool is_cb) {
-    if (!wait_thread) {
-        return;
+SceInt32 wait_vblank_start(EmuEnvState &emuenv, ThreadState &thread, int count, bool callbacks) {
+    // The reference keeps the event alive while the thread waits on it
+    const SimpleEventRef event = emuenv.kernel.kernel_objects.find<SimpleEvent>(emuenv.display.vblank_event);
+    if (!event)
+        return SCE_KERNEL_ERROR_UNKNOWN_EVENT_ID;
+    // A wait in a callback goes one level deeper and starts from the base of the wait around it
+    uint32_t &depth = thread.display_waits.depth;
+    auto &bases = thread.display_waits.bases;
+    const uint64_t base = bases[std::min<size_t>(depth, std::size(bases) - 1)];
+    ++depth;
+    if (depth < std::size(bases))
+        bases[depth] = bases[depth - 1];
+    SceInt32 result;
+    uint64_t now;
+    do {
+        result = event->wait(thread, VBLANK_EVENT_BIT, nullptr, nullptr, nullptr, callbacks);
+        now = emuenv.display.vblank_count;
+    } while (result >= 0 && static_cast<int64_t>(now - base) < count);
+    --depth;
+    if (depth < std::size(bases))
+        bases[depth] = now;
+    return result;
+}
+
+SceInt32 wait_until_vblank(EmuEnvState &emuenv, ThreadState &thread, uint64_t target, bool callbacks) {
+    const SimpleEventRef event = emuenv.kernel.kernel_objects.find<SimpleEvent>(emuenv.display.vblank_event);
+    if (!event)
+        return SCE_KERNEL_ERROR_UNKNOWN_EVENT_ID;
+    while (emuenv.display.vblank_count < target) {
+        if (const SceInt32 result = event->wait(thread, VBLANK_EVENT_BIT, nullptr, nullptr, nullptr, callbacks); result < 0)
+            return result;
     }
-
-    {
-        auto thread_lock = std::unique_lock(wait_thread->mutex);
-
-        {
-            const std::lock_guard<std::mutex> guard(display.mutex);
-
-            if (target_vcount <= display.vblank_count)
-                return;
-
-            wait_thread->update_status(ThreadStatus::wait);
-            display.vblank_wait_infos.push_back({ wait_thread, target_vcount });
-        }
-
-        wait_thread->status_cond.wait(thread_lock, [&]() {
-            return wait_thread->status == ThreadStatus::run;
-        });
-    }
-
-    if (is_cb) {
-        for (auto &[_, cb] : display.vblank_callbacks) {
-            if (cb->get_owner_thread_id() == wait_thread->id) {
-                std::string name = cb->get_name();
-                cb->execute(kernel, [name]() {
-                });
-            }
-        }
-    }
+    return SCE_KERNEL_OK;
 }
 
 static void reset_swapchain_cycle(DisplayState &display, Address sync_object) {
@@ -218,19 +226,17 @@ void update_prediction(EmuEnvState &emuenv, DisplayFrameInfo &frame) {
     display.predicted_cycles_seen = std::min(display.predicted_cycles_seen, 1U);
 }
 
-void DisplayState::deinit() {
+void DisplayState::deinit(KernelState &kernel) {
     abort = true;
     if (vblank_thread && vblank_thread->joinable())
         vblank_thread->join();
 
     vblank_thread.reset();
     abort = false;
-
-    {
-        const std::lock_guard<std::mutex> guard(mutex);
-        vblank_wait_infos.clear();
-        vblank_callbacks.clear();
-    }
+    // The vblank thread has stopped. Removing the event ends any wait left on it and drops the
+    // registered callbacks.
+    kernel.kernel_objects.remove<SimpleEvent>(vblank_event, 0);
+    vblank_event = 0;
 
     {
         const std::lock_guard<std::mutex> guard(display_info_mutex);

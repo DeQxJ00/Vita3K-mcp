@@ -127,6 +127,19 @@ bool PlayerModule::process(KernelState &kern, const MemState &mem, const SceUID 
         if ((state->current_buffer == -1)
             || !params->buffer_params[state->current_buffer].buffer
             || (params->buffer_params[state->current_buffer].bytes_count == 0)) {
+            if (state->current_buffer > -1) {
+                const int next_buffer_index = params->buffer_params[state->current_buffer].next_buffer_index;
+                if (next_buffer_index > -1
+                    && next_buffer_index < SCE_NGS_PLAYER_MAX_BUFFERS
+                    && params->buffer_params[next_buffer_index].buffer
+                    && params->buffer_params[next_buffer_index].bytes_count > 0) {
+                    state->current_buffer = next_buffer_index;
+                    state->current_byte_position_in_buffer = 0;
+                    logical->current_loop_count = 0;
+                    continue;
+                }
+            }
+
             // Stop processing if no valid buffer is available or if the buffer is empty
             finished = true;
             break;
@@ -293,7 +306,7 @@ bool PlayerModule::process(KernelState &kern, const MemState &mem, const SceUID 
         data.parent->products[0].data = logical->decoded_pcm.read_bytes();
     } else {
         data.ensure_scratch_size(static_cast<size_t>(granularity) * sizeof(float) * 2);
-        std::fill(data.scratch_data.begin(), data.scratch_data.end(), 0);
+        std::ranges::fill(data.scratch_data, 0);
         if (available_samples > 0) {
             std::memcpy(data.scratch_data.data(), logical->decoded_pcm.read_bytes(), static_cast<size_t>(available_samples) * sizeof(float) * 2);
         }

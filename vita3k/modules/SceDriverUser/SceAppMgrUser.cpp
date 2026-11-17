@@ -216,9 +216,9 @@ EXPORT(int, sceAppMgrGetAppMgrState) {
     return UNIMPLEMENTED();
 }
 
-EXPORT(int, sceAppMgrGetAppParam) {
-    TRACY_FUNC(sceAppMgrGetAppParam);
-    return UNIMPLEMENTED();
+EXPORT(SceInt32, sceAppMgrGetAppParam, char *param) {
+    TRACY_FUNC(sceAppMgrGetAppParam, param);
+    return CALL_EXPORT(_sceAppMgrGetAppParam, param);
 }
 
 EXPORT(int, sceAppMgrGetAppParam2) {
@@ -560,7 +560,7 @@ EXPORT(int, sceAppMgrSaveDataDataRemove, Ptr<SceAppMgrSaveDataDataDelete> data) 
         if (fs::is_regular_file(file)) {
             remove_file(emuenv.io, file.string().c_str(), emuenv.vita_fs_path, export_name);
         } else
-            remove_dir(emuenv.io, file.string().c_str(), emuenv.vita_fs_path, export_name);
+            remove_dir(emuenv.io, file.string().c_str(), emuenv.vita_fs_path, export_name, true);
     }
 
     return 0;

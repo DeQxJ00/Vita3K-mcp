@@ -50,6 +50,8 @@ class QSlider;
 class QToolBar;
 class QVariantAnimation;
 class TrophyCollectionDialog;
+class CheatsDialog;
+class SaveDataManagerDialog;
 class CtrlKeyboardFilter;
 class DebugWidget;
 class LiveAreaWidget;
@@ -86,6 +88,7 @@ protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
+    void showEvent(QShowEvent *event) override;
 
 private slots:
     void on_about_action_triggered();
@@ -99,6 +102,7 @@ private slots:
     void restart_running_app();
     void pump_sdl_events();
     void open_trophy_collection();
+    void open_save_data_manager();
     void open_user_management();
     void open_vita_themes();
     void show_live_area(const std::string &title_id);
@@ -127,6 +131,8 @@ private:
     void initialize();
     void init_current_user();
     void boot_game(const std::string &title_id);
+    void open_cheats_for(const std::string &title_id, const QString &app_title);
+    void refresh_cheats_dialog();
     void boot_game(const AppLaunchRequest &launch_request, bool prompt_before_closing_existing = true);
     std::optional<AppLaunchRequest> boot_game_once(const AppLaunchRequest &launch_request, bool prompt_before_closing_existing);
     std::optional<AppLaunchRequest> take_pending_app_launch_request();
@@ -189,6 +195,7 @@ private:
     QTimer *m_sdl_pump_timer = nullptr;
 
     QPointer<TrophyCollectionDialog> m_trophy_dialog;
+    QPointer<SaveDataManagerDialog> m_save_data_dialog;
     QPointer<UserManagementDialog> m_user_mgmt_dialog;
     CtrlKeyboardFilter *m_kb_filter = nullptr;
     QPointer<DebugWidget> m_debug_widget;
@@ -197,6 +204,7 @@ private:
     QPointer<ControlsDialog> m_controls_dialog;
     QPointer<SettingsDialog> m_settings_dialog;
     QPointer<VitaThemesDialog> m_vita_themes_dialog;
+    QPointer<CheatsDialog> m_cheats_dialog;
     std::string m_live_area_title_id;
 
     QLineEdit *m_search_bar = nullptr;

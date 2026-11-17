@@ -125,6 +125,12 @@ If you aren't satisfied with the way the Visual Studio integrates CMake projects
   sudo dnf install git cmake ninja-build SDL2-devel pkg-config gtk3-devel clang lld xdg-desktop-portal openssl openssl-devel libstdc++-static qt6-qtbase-devel
   ```
 
+### Arch Linux
+
+  ```sh
+  sudo pacman -Syu --needed dbus python qt6-base qt6-multimedia qt6-svg qt6-tools sdl3 boost boost-libs clang cmake git lld ninja pkgconf openssl which
+  ```
+
 Note: Your Qt packages must provide Qt 6.11 or newer. If your distro ships an older Qt, install the official Qt 6.11 package and set `Qt6_ROOT` before running CMake.
 
 Note: The CMake preset `linux-ninja-clang` makes use of the LLD linker, which will need to be installed in your system along with Clang.
@@ -171,11 +177,6 @@ Note: The CMake preset `linux-ninja-clang` makes use of the LLD linker, which wi
   git submodule update --init --recursive
   ```
 
-- If Boost failed to build, you can use the system Boost package (Linux and macOS only).
-
-  ```sh
-  brew install boost # for macOS
-  sudo apt install libboost-filesystem-dev libboost-program-options-dev libboost-system-dev # for Ubuntu/Debian
-  ```
+- Only header-only Boost libraries are used, so Boost does not need to be built. By default, a system Boost is used when found, otherwise the one included with the repository.
 
   If needed, CMake options `VITA3K_FORCE_CUSTOM_BOOST` and `VITA3K_FORCE_SYSTEM_BOOST` can be set to change the way the CMake project looks for Boost.

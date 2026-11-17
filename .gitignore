@@ -20,9 +20,10 @@ compile_commands.json
 tools/vita3k-mcp/node_modules/
 tools/vita3k-mcp/dist/
 tools/vita3k-mcp/coverage/
-# AppImage builder
-appimage/linuxdeploy*.AppImage
 /.gdbinit
+
+# Locally downloaded AppImage tools
+/appimage/*.AppImage
 
 # generated linux metainfo.xml
 dist/linux/*.metainfo.xml
@@ -41,6 +42,9 @@ dist/linux/*.metainfo.xml
 bin/
 gen/
 out/
+
+# vcpkg packages
+vcpkg_installed/
 
 # Gradle files
 .gradle/
@@ -92,3 +96,10 @@ fastlane/readme.md
 
 # Copilot local config
 .github/copilot-instructions.md
+
+# Translations
+/template/
+/android/app/src/main/res/values-*/strings.xml
+
+# Python caches, from running tools/autotests with pytest directly
+__pycache__/

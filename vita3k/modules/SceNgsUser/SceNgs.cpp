@@ -57,6 +57,37 @@ struct SceNgsPatchDeliveryInfo {
 
 static_assert(sizeof(SceNgsPatchDeliveryInfo) == 20);
 
+static ngs::Voice *find_patch_source_voice(ngs::State &ngs, const MemState &mem, const Ptr<ngs::Patch> patch) {
+    for (ngs::System *system : ngs.systems) {
+        if (!system) {
+            continue;
+        }
+
+        for (ngs::Rack *rack : system->racks) {
+            if (!rack) {
+                continue;
+            }
+
+            for (const Ptr<ngs::Voice> voice_handle : rack->voices) {
+                ngs::Voice *voice = voice_handle.get(mem);
+                if (!voice) {
+                    continue;
+                }
+
+                for (const auto &patches : voice->patches) {
+                    for (const Ptr<ngs::Patch> owned_patch : patches) {
+                        if (owned_patch == patch) {
+                            return voice;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return nullptr;
+}
+
 enum SceNgsErrorCode : uint32_t {
     SCE_NGS_OK = 0,
     SCE_NGS_ERROR = 0x804A0001,
@@ -64,6 +95,7 @@ enum SceNgsErrorCode : uint32_t {
     SCE_NGS_ERROR_INVALID_STATE = 0x804A0010,
     SCE_NGS_ERROR_PARAM_OUT_OF_RANGE = 0x804A0009,
     SCE_NGS_ERROR_INVALID_HANDLE = 0x804A000C,
+    SCE_NGS_ERROR_PATCH_NOT_AVAIL = 0x804A000E,
     SCE_NGS_SIZE_MISMATCH = 0x804A000D
 };
 
@@ -251,7 +283,7 @@ EXPORT(int, sceNgsPatchRemoveRouting, Ptr<ngs::Patch> patch) {
         return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
     }
 
-    ngs::Voice *source = patch.get(emuenv.mem)->source.get(emuenv.mem);
+    ngs::Voice *source = find_patch_source_voice(emuenv.ngs, emuenv.mem, patch);
     if (!source || !source->remove_patch(emuenv.mem, patch)) {
         return RET_ERROR(SCE_NGS_ERROR);
     }
@@ -728,12 +760,23 @@ EXPORT(SceInt32, sceNgsVoiceGetOutputPatch, ngs::Voice *voice, const SceInt32 ou
     }
 
     *patch = voice->patches[output_index][output_subindex];
-    if (!(*patch) || (patch->get(emuenv.mem))->output_sub_index == -1) {
-        LOG_WARN_ONCE("Getting non-existen output patch port {}:{}", output_index, output_subindex);
-        *patch = Ptr<ngs::Patch>(0);
+    ngs::Patch *output_patch = nullptr;
+    if (*patch) {
+        if (!patch->valid(emuenv.mem)) {
+            return RET_ERROR(SCE_NGS_ERROR_INVALID_HANDLE);
+        }
+
+        output_patch = patch->get(emuenv.mem);
     }
 
-    return 0;
+    if (!output_patch || (output_patch->output_sub_index == -1)) {
+        if (output_patch)
+            *patch = Ptr<ngs::Patch>(0);
+
+        return RET_ERROR(SCE_NGS_ERROR_PATCH_NOT_AVAIL);
+    }
+
+    return SCE_NGS_OK;
 }
 
 EXPORT(int, sceNgsVoiceGetParamsOutOfRange) {
@@ -822,14 +865,9 @@ EXPORT(SceInt32, sceNgsVoiceKeyOff, ngs::Voice *voice) {
         return RET_ERROR(SCE_NGS_ERROR_INVALID_ARG);
     }
 
-    voice->is_keyed_off = true;
+    // The next system update ends the voice and calls its finished callback, as games may hold their own locks here
     voice->rack->system->voice_scheduler.off(emuenv.mem, voice);
 
-    // call the finish callback, I got no idea what the module id should be in this case
-    voice->invoke_callback(emuenv.kernel, emuenv.mem, thread_id, voice->finished_callback, voice->finished_callback_user_data, 0);
-
-    voice->is_keyed_off = false;
-    voice->rack->system->voice_scheduler.stop(emuenv.mem, voice);
     return SCE_NGS_OK;
 }
 

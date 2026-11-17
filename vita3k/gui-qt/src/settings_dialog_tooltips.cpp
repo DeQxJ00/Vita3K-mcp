@@ -42,6 +42,8 @@ QString restart_required_setting_label(config::RestartRequiredSetting setting) {
         return QCoreApplication::translate("SettingsDialogTooltips", "Audio Backend");
     case config::RestartRequiredSetting::ValidationLayer:
         return QCoreApplication::translate("SettingsDialogTooltips", "Vulkan Validation Layer");
+    case config::RestartRequiredSetting::DisableMaskBit:
+        return QCoreApplication::translate("SettingsDialogTooltips", "Disable Mask Bit Emulation");
     }
 
     return {};
@@ -74,8 +76,6 @@ bool prompt_restart_required_dialog(QWidget *parent, const std::vector<config::R
 
 QString SettingsDialogTooltips::category_summary(SettingsTab tab) const {
     switch (tab) {
-    case SettingsTab::Core:
-        return tr("Control how low-level modules are loaded.");
     case SettingsTab::CPU:
         return tr("Manage CPU behavior.");
     case SettingsTab::Graphics:
@@ -92,6 +92,8 @@ QString SettingsDialogTooltips::category_summary(SettingsTab tab) const {
         return tr("Customize the Vita3K interface.");
     case SettingsTab::Network:
         return tr("Configure network related settings here.");
+    case SettingsTab::Advanced:
+        return tr("Settings most users do not need to change: module loading, shader and OpenGL options.");
     case SettingsTab::Debug:
         return tr("Internal diagnostics, GPU debugging, and watch controls live here. These settings are mainly for developers.");
     default:
@@ -164,6 +166,7 @@ SettingsDialogTooltips::SettingsDialogTooltips(QObject *parent)
     , log_uniforms(tr("Log shader uniform values."))
     , color_surface_debug(tr("Save color surfaces to files."))
     , validation_layer(tr("Enable Vulkan validation layers. Useful for debugging but reduces performance."))
+    , disable_mask_bit(tr("Disable mask bit emulation in the OpenGL renderer. Turn this on if the screen stays black on some AMD integrated GPUs.\nA few games that rely on the mask bit will render incorrectly. Requires a restart."))
     , dump_elfs(tr("Dump loaded code as ELFs."))
     , gb_debug_tracy_section(tr("The Tracy profiler implementation in the emulator allows among other things to track the functions that a game calls in real-time and visualize them in a timeline with timings for every frame and audio buffer."))
     , tracy_primitive_impl(tr("The primitive Tracy implementation for HLE modules allows for all HLE module calls to be logged without manual instrumentation needed. However it is just a general workaround that doesn't count for statistic analysis neither for trace searching on Tracy. Due to the amount of functions being logged due to this implementation Tracy logs can become gigabytes long in a matter of minutes. Because of this it is only recommended to be used when the module(s) to debug aren't available for advanced profiling or a more general overview of the function calls is needed and in a PC with at least 12GB (Linux) or 16GB (Windows) of RAM."))
@@ -177,8 +180,9 @@ SettingsDialogTooltips::SettingsDialogTooltips(QObject *parent)
     , confirm_exit_app(tr("Show a confirmation dialog before closing a running app."))
     , warn_admin_privileges(tr("Show a warning at startup when Vita3K is launched with administrator or root privileges."))
     , windows_rounded_corners(tr("Enable rounded corners for the game window on Windows.\nUnsupported Windows versions may ignore this setting."))
+    , remember_game_window_size(tr("Open the game window at the size it had when a game was last closed in a window.\nWhen disabled, the game window always opens at its default size."))
     , log_buffer_size(tr("Set the maximum number of log lines to keep in memory.\nSet to 0 to remove the user cap and use the built-in safety limit."))
     , log_font(tr("Choose the font family used by the log view."))
-    , gui_stylesheet(tr("Select the visual theme for the application.\nYou can also place custom .qss files in the gui-configs folder."))
+    , gui_stylesheet(tr("Select the visual theme for the application.\nPlace custom themes in gui-configs/custom-themes; non-Windows OS may keep theme assets in separate folders."))
     , ui_language(tr("Select the desktop interface language used by the Qt frontend.\nUse System Default to follow the operating system language.")) {
 }

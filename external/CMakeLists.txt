@@ -64,9 +64,6 @@ target_include_directories(stb INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/stb")
 add_library(ddspp INTERFACE)
 target_include_directories(ddspp INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/ddspp")
 
-add_library(cppcommon STATIC CppCommon/source/cpu.cpp CppCommon/source/environment.cpp)
-target_include_directories(cppcommon PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/CppCommon")
-
 add_library(glad STATIC "${CMAKE_CURRENT_SOURCE_DIR}/glad/src/glad.c")
 target_include_directories(glad PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/glad/include")
 
@@ -142,6 +139,7 @@ target_include_directories(vita-toolchain INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}
 
 option(YAML_CPP_BUILD_TOOLS "Enable parse tools" OFF)
 option(YAML_CPP_BUILD_CONTRIB "Enable contrib stuff in library" OFF)
+option(BUILD_TESTING "Build tests" OFF)
 add_subdirectory(yaml-cpp EXCLUDE_FROM_ALL)
 
 if(USE_DISCORD_RICH_PRESENCE)
@@ -274,6 +272,10 @@ if(ANDROID)
 	set(USE_STATIC_ANDROID_FFMPEG ON)
 endif()
 add_subdirectory(ffmpeg)
+if(MINGW)
+	# libavutil needs bcrypt; Boost.Filesystem used to pull it in
+	target_link_libraries(ffmpeg INTERFACE bcrypt)
+endif()
 
 if(APPLE OR NOT FORCE_BUILD_OPENSSL_MAC)
 	execute_process(

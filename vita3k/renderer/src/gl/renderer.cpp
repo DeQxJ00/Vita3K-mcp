@@ -233,11 +233,15 @@ bool create(std::unique_ptr<State> &state, const Config &config) {
         LOG_WARN("Consider updating your graphics drivers or upgrading your GPU.");
     }
 
-    // always enabled in the opengl renderer
 #ifdef __ANDROID__
     gl_state.features.use_mask_bit = false;
 #else
-    gl_state.features.use_mask_bit = true;
+    // Some AMD integrated GPUs return zero from imageLoad() on the mask texture after
+    // sync_mask() cleared it with glClearTexImage (fast clear metadata is not resolved
+    // for read-only image bindings), which turns the whole frame black.
+    gl_state.features.use_mask_bit = !config.current_config.disable_mask_bit;
+    if (config.current_config.disable_mask_bit)
+        LOG_WARN("Mask bit emulation is disabled by the settings");
 #endif
 
     return gl_state.init();
@@ -261,7 +265,7 @@ bool GLState::init() {
 }
 
 void GLState::late_init(const Config &cfg, const std::string_view game_id, MemState &mem) {
-    texture_cache.init(true, texture_folder(), game_id);
+    texture_cache.init(cfg.hashless_texture_cache, texture_folder(), game_id);
 }
 
 bool create(std::unique_ptr<Context> &context) {
@@ -515,7 +519,7 @@ static void post_process_pixels_data(GLState &renderer, std::uint32_t *pixels, s
                 const size_t first_pixel_offset_in_linear = (j * stride) + hori_tile * 32;
 
                 memcpy(buffer.data() + first_pixel_offset_in_tile * bytes_per_pixel,
-                    (const char *)(pixels) + first_pixel_offset_in_linear * bytes_per_pixel, 32 * bytes_per_pixel);
+                    reinterpret_cast<const char *>(pixels) + first_pixel_offset_in_linear * bytes_per_pixel, 32 * bytes_per_pixel);
             }
         }
         memcpy(pixels, buffer.data(), buffer.size());
@@ -526,7 +530,7 @@ void lookup_and_get_surface_data(GLState &renderer, MemState &mem, SceGxmColorSu
     std::uint32_t swizzle = 0;
 
     GLint tex_handle = static_cast<GLint>(renderer.surface_cache.retrieve_color_surface_texture_handle(renderer, static_cast<std::uint16_t>(surface.width),
-        static_cast<std::uint16_t>(surface.height), static_cast<std::uint16_t>(surface.strideInPixels),
+        static_cast<std::uint16_t>(surface.height), surface.strideInPixels,
         gxm::get_base_format(surface.colorFormat), surface.data, SurfaceTextureRetrievePurpose::READING, swizzle));
 
     if (tex_handle == 0) {
@@ -794,14 +798,23 @@ std::vector<uint32_t> GLState::dump_frame(DisplayState &display, uint32_t &width
 }
 
 int GLState::get_supported_filters() {
-    // actually it's not even bilinear, it's either bilinear or nearest depending on the last use of the texture..
-    // TODO: add bicubic filter and allow disabling bilinear.
-    return static_cast<int>(Filter::BILINEAR) | static_cast<int>(Filter::FXAA);
+    return static_cast<int>(Filter::NEAREST) | static_cast<int>(Filter::BILINEAR)
+        | static_cast<int>(Filter::BICUBIC) | static_cast<int>(Filter::FXAA) | static_cast<int>(Filter::SMAA) | static_cast<int>(Filter::FSR);
 }
 
 void GLState::set_screen_filter(const std::string_view &filter) {
-    // we only support bilinear and fxaa
-    screen_renderer.enable_fxaa = (filter == "FXAA");
+    if (filter == "Nearest")
+        screen_renderer.set_filter(ScreenFilter::NEAREST);
+    else if (filter == "FXAA")
+        screen_renderer.set_filter(ScreenFilter::FXAA);
+    else if (filter == "SMAA")
+        screen_renderer.set_filter(ScreenFilter::SMAA);
+    else if (filter == "FSR")
+        screen_renderer.set_filter(ScreenFilter::FSR);
+    else if (filter == "Bicubic")
+        screen_renderer.set_filter(ScreenFilter::BICUBIC);
+    else
+        screen_renderer.set_filter(ScreenFilter::BILINEAR);
 }
 
 int GLState::get_max_anisotropic_filtering() {

@@ -1173,7 +1173,8 @@ static_assert(sizeof(SceGxmBlendInfo) == 4, "Incorrect size.");
 
 struct SceGxmTexture {
     // Control Word 0
-    uint32_t unk0 : 3;
+    uint32_t unk0 : 1;
+    uint32_t stride_hi : 2;
     uint32_t vaddr_mode : 3;
     uint32_t uaddr_mode : 3;
     uint32_t mip_filter : 1;
@@ -1224,6 +1225,10 @@ struct SceGxmTexture {
 
         uint32_t count = (mip_count + 1) & 15;
         return (count == 0) ? 1 : count; // 0 count is no mip chain, but there's still top level...
+    }
+
+    uint32_t true_lod_min() const {
+        return (lod_min0 << 2) | lod_min1;
     }
 };
 

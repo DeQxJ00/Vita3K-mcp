@@ -73,6 +73,8 @@ bool init(MemState &state, const bool use_page_table) {
 
     assert(state.host_page_size >= 4096); // Limit imposed by Unicorn.
 
+    state.invalid_access_logged.clear();
+
     void *preferred_address = reinterpret_cast<void *>(1ULL << 34);
 
 #ifdef _WIN32
@@ -151,6 +153,19 @@ bool is_valid_addr(const MemState &state, Address addr) {
 bool is_valid_addr_range(const MemState &state, Address start, Address end) {
     const uint32_t start_page = start / STANDARD_PAGE_SIZE;
     const uint32_t end_page = (end + STANDARD_PAGE_SIZE - 1) / STANDARD_PAGE_SIZE;
+    return state.allocator.free_slot_count(start_page, end_page) == 0;
+}
+
+// Whether the len bytes at addr are all mapped
+bool is_valid_addr_len(const MemState &state, Address addr, uint32_t len) {
+    // An empty range reads nothing
+    if (len == 0)
+        return true;
+    const uint64_t end = static_cast<uint64_t>(addr) + len;
+    if (end > (UINT64_C(1) << 32))
+        return false;
+    const uint32_t start_page = addr / STANDARD_PAGE_SIZE;
+    const uint32_t end_page = static_cast<uint32_t>((end + STANDARD_PAGE_SIZE - 1) / STANDARD_PAGE_SIZE);
     return state.allocator.free_slot_count(start_page, end_page) == 0;
 }
 
@@ -654,13 +669,13 @@ static void register_access_violation_handler(const AccessViolationHandler &hand
     sa.sa_flags = SA_SIGINFO;
     sigemptyset(&sa.sa_mask);
     sa.sa_sigaction = signal_handler;
-    if (sigaction(SIGSEGV, &sa, NULL) == -1) {
+    if (sigaction(SIGSEGV, &sa, nullptr) == -1) {
         LOG_CRITICAL("Failed to register an exception handler");
     }
 #ifdef __APPLE__
     // When accessing memory region which is PROT_NONE on macOS, it is raising SIGBUS not SIGSEGV.
     // So apply same signal handler to SIGBUS
-    if (sigaction(SIGBUS, &sa, NULL) == -1) {
+    if (sigaction(SIGBUS, &sa, nullptr) == -1) {
         LOG_CRITICAL("Failed to register an exception handler to SIGBUS");
     }
 #endif

@@ -476,11 +476,7 @@ private fun GpuSettingsSection(
             )
             val screenFilterTitle = stringResource(R.string.settings_gpu_screen_filter)
             val screenFilterHelp = helpEntry(screenFilterTitle, stringResource(R.string.settings_gpu_screen_filter_desc))
-            val filterOptions = if (isVulkan) {
-                listOf("Nearest", "Bilinear", "Bicubic", "FXAA", "FSR")
-            } else {
-                listOf("Bilinear", "FXAA")
-            }
+            val filterOptions = listOf("Nearest", "Bilinear", "Bicubic", "FXAA", "SMAA", "FSR")
             val selectedFilter = cfg.screenFilter.takeIf { it in filterOptions } ?: filterOptions.first()
             SettingsChoiceField(
                 title = screenFilterTitle,
@@ -1110,9 +1106,9 @@ private fun AudioSettingsSection(
         SettingsSliderRow(
             title = stringResource(R.string.settings_audio_volume),
             valueLabel = stringResource(R.string.settings_audio_volume_value, cfg.audioVolume),
-            value = cfg.audioVolume.toFloat().coerceIn(0f, 100f),
-            onValueChange = { onUpdate { audioVolume = it.roundToInt().coerceIn(0, 100) } },
-            valueRange = 0f..100f,
+            value = cfg.audioVolume.toFloat().coerceIn(0f, 200f),
+            onValueChange = { onUpdate { audioVolume = it.roundToInt().coerceIn(0, 200) } },
+            valueRange = 0f..200f,
             steps = 0,
             help = SettingsHelpEntry(
                 title = stringResource(R.string.settings_audio_volume),

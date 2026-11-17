@@ -58,7 +58,8 @@ VKContext::VKContext(VKState &state, MemState &mem)
         std::fill_n(vertex_stream_buffers, SCE_GXM_MAX_VERTEX_STREAMS, state.default_buffer.buffer);
 
         // also initialize the gpu wait thread
-        gpu_request_wait_thread = std::thread(&VKContext::wait_thread_function, this, std::ref(mem));
+        if (!state.gpu_request_wait_thread.joinable())
+            state.gpu_request_wait_thread = std::thread(&VKState::wait_thread_function, &state, std::cref(mem));
     } else {
         // these are not needed when using memory mapping
         vertex_stream_ring_buffer.create();
@@ -150,12 +151,13 @@ VKContext::VKContext(VKState &state, MemState &mem)
 }
 
 VKContext::~VKContext() {
-    if (gpu_request_wait_thread.joinable())
-        gpu_request_wait_thread.join();
-
-    for (auto &[addr, vb] : visibility_buffers)
-        state.device.destroy(vb.query_pool);
+    for (auto pool : visibility_query_pools)
+        state.device.destroy(pool);
     visibility_buffers.clear();
+    state.device.destroy(visibility_pipeline);
+    state.device.destroy(visibility_pipeline_layout);
+    state.device.destroy(visibility_descriptor_layout);
+    state.device.destroy(visibility_shader);
 
     state.device.destroy(global_descriptor_pool);
     global_descriptor_pool = nullptr;
@@ -168,11 +170,11 @@ VKRenderTarget::VKRenderTarget(VKState &state, const SceGxmRenderTargetParams &p
     width = static_cast<uint32_t>(params.width * state.res_multiplier);
     height = static_cast<uint32_t>(params.height * state.res_multiplier);
 
-    vk::ImageUsageFlags color_usage = vk::ImageUsageFlagBits::eColorAttachment;
+    vk::ImageUsageFlags color_usage = vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eInputAttachment;
     if (state.features.support_shader_interlock)
         color_usage |= vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eStorage;
     else
-        color_usage |= vk::ImageUsageFlagBits::eInputAttachment | vk::ImageUsageFlagBits::eTransientAttachment;
+        color_usage |= vk::ImageUsageFlagBits::eTransientAttachment;
     color.init_image(color_usage);
     if (params.multisampleMode == SCE_GXM_MULTISAMPLE_4X) {
         // the depth buffer may need to be 4x bigger if we use a texture without downscale
@@ -182,13 +184,30 @@ VKRenderTarget::VKRenderTarget(VKState &state, const SceGxmRenderTargetParams &p
 
     depthstencil.init_image(vk::ImageUsageFlagBits::eDepthStencilAttachment | vk::ImageUsageFlagBits::eTransientAttachment);
 
+    if (state.features.use_mask_bit) {
+        mask = vkutil::Image(depthstencil.width, depthstencil.height, vk::Format::eR8G8B8A8Unorm);
+        mask.init_image(vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferDst);
+
+        vk::FramebufferCreateInfo mask_info{
+            .renderPass = state.pipeline_cache.retrieve_mask_render_pass(),
+            .width = mask.width,
+            .height = mask.height,
+            .layers = 1
+        };
+        mask_info.setAttachments(mask.view);
+        mask_framebuffer = device.createFramebuffer(mask_info);
+    }
+
     // transition images to their right state
     vk::CommandBuffer cmd_buffer = vkutil::create_single_time_command(state.device, state.general_command_pool);
     // color
     color.transition_to_discard(cmd_buffer, vkutil::ImageLayout::ColorAttachmentReadWrite);
     // depth stencil
     depthstencil.transition_to_discard(cmd_buffer, vkutil::ImageLayout::DepthStencilAttachment, vkutil::ds_subresource_range);
-    vkutil::end_single_time_command(state.device, state.general_queue, state.general_command_pool, cmd_buffer);
+    {
+        std::lock_guard<std::mutex> lock(state.queue_mutex);
+        vkutil::end_single_time_command(state.device, state.general_queue, state.general_command_pool, cmd_buffer);
+    }
 
     constexpr uint16_t SCE_GXM_MAX_SCENES_PER_RENDERTARGET = 8;
     // hopefully this will always be enough
@@ -213,6 +232,7 @@ VKRenderTarget::VKRenderTarget(VKState &state, const SceGxmRenderTargetParams &p
 }
 
 VKRenderTarget::~VKRenderTarget() {
+    device.destroy(mask_framebuffer);
     for (auto &fence : fences)
         device.destroy(fence);
     fences.clear();
@@ -240,6 +260,8 @@ void destroy(VKState &state, std::unique_ptr<RenderTarget> &rt) {
     FrameObject &frame = state.frame();
     frame.destroy_queue.add_image(render_target.color);
     frame.destroy_queue.add_image(render_target.depthstencil);
+    frame.destroy_queue.add(render_target.mask_framebuffer);
+    frame.destroy_queue.add_image(render_target.mask);
 
     for (auto &fence : render_target.fences)
         frame.destroy_queue.add(fence);

@@ -21,6 +21,7 @@
 #include "module/load_module.h"
 
 #include <algorithm>
+#include <cheat/functions.h>
 #include <config/state.h>
 #include <ctime>
 #include <ctrl/state.h>
@@ -28,6 +29,7 @@
 #include <display/functions.h>
 #include <display/state.h>
 #include <emuenv/state.h>
+#include <gxm/functions.h>
 #include <io/functions.h>
 #include <io/vfs.h>
 #include <kernel/state.h>
@@ -45,6 +47,7 @@
 #include <pugixml.hpp>
 
 #include <modules/module_parent.h>
+#include <modules/sysmem_state.h>
 #include <string>
 #include <util/log.h>
 #include <util/string_utils.h>
@@ -114,6 +117,11 @@ static bool is_nonpdrm(EmuEnvState &emuenv, const fs::path &output_path) {
 }
 
 static bool set_content_path(EmuEnvState &emuenv, const bool is_theme, fs::path &dest_path) {
+    if (emuenv.app_info.app_title_id.empty()) {
+        LOG_ERROR("param.sfo has no title ID, not installing it");
+        return false;
+    }
+
     const auto app_path = dest_path / "app" / emuenv.app_info.app_title_id;
 
     if (emuenv.app_info.app_category == "ac") {
@@ -179,7 +187,10 @@ static bool install_archive_content(EmuEnvState &emuenv, const ZipPtr &zip, cons
 
     auto output_path{ emuenv.vita_fs_path / "ux0" };
     if (mz_zip_reader_extract_file_to_callback(zip.get(), (content_path + sfo_path).c_str(), &write_to_buffer, &buffer, 0)) {
-        sfo::get_param_info(emuenv.app_info, buffer, emuenv.cfg.sys_lang);
+        if (!sfo::get_param_info(emuenv.app_info, buffer, emuenv.cfg.sys_lang)) {
+            LOG_ERROR("{}{} is not a readable param.sfo, not installing it", content_path, sfo_path);
+            return false;
+        }
         if (!set_content_path(emuenv, is_theme, output_path))
             return false;
     } else if (is_theme) {
@@ -221,7 +232,16 @@ static bool install_archive_content(EmuEnvState &emuenv, const ZipPtr &zip, cons
             update_progress();
 
             std::string replace_filename = m_filename.substr(content_path.size());
-            const fs::path file_output = (output_path / fs_utils::utf8_to_path(replace_filename)).generic_path();
+            const fs::path file_output = fs_utils::generic_path(output_path / fs_utils::utf8_to_path(replace_filename));
+
+            const fs::path normalized_output_path = output_path.lexically_normal();
+            const fs::path normalized_file_output = file_output.lexically_normal();
+            const fs::path relative_to_output = normalized_file_output.lexically_relative(normalized_output_path);
+            if (relative_to_output.empty() || *relative_to_output.begin() == "..") {
+                LOG_ERROR("Rejecting archive entry whose path escapes the install directory: {}", m_filename);
+                continue;
+            }
+
             if (mz_zip_reader_is_file_a_directory(zip.get(), i)) {
                 fs::create_directories(file_output);
             } else {
@@ -359,7 +379,10 @@ static bool install_content(EmuEnvState &emuenv, const fs::path &content_path) {
     const auto is_theme = fs::exists(theme_path);
     auto dst_path{ emuenv.vita_fs_path / "ux0" };
     if (fs_utils::read_data(sfo_path, buffer)) {
-        sfo::get_param_info(emuenv.app_info, buffer, emuenv.cfg.sys_lang);
+        if (!sfo::get_param_info(emuenv.app_info, buffer, emuenv.cfg.sys_lang)) {
+            LOG_ERROR("{} is not a readable param.sfo, not installing it", fs_utils::path_to_utf8(sfo_path));
+            return false;
+        }
         if (!set_content_path(emuenv, is_theme, dst_path))
             return false;
 
@@ -425,12 +448,36 @@ static void do_patches(MemState &mem, const Patches &patches, const SceKernelMod
     }
 }
 
+// Registers the modules a `$B2` code can pick from along with the cheat file of the title.
+static void load_cheats(EmuEnvState &emuenv, const SceKernelModuleInfo &module_info) {
+    cheat::unload(emuenv.cheat);
+
+    const cheat::JitInvalidate invalidate_jit = [&emuenv](uint32_t address, size_t size) {
+        emuenv.kernel.invalidate_jit_cache(address, size);
+    };
+    cheat::set_enabled(emuenv.cheat, emuenv.cfg.enable_cheats, emuenv.mem, invalidate_jit);
+
+    // A `$B2` code with module index 0 refers to the main executable.
+    CheatModule main_module;
+    main_module.name = std::string(module_info.module_name, strnlen(module_info.module_name, sizeof(module_info.module_name)));
+    static_assert(main_module.segments.size() == MODULE_INFO_NUM_SEGMENTS);
+    for (size_t i = 0; i < main_module.segments.size(); i++) {
+        main_module.segments[i].address = module_info.segments[i].vaddr.address();
+        main_module.segments[i].size = module_info.segments[i].memsz;
+    }
+    cheat::add_module(emuenv.cheat, main_module);
+
+    if (cheat::load(emuenv.cheat, emuenv.cheat_path, emuenv.io.title_id)) {
+        LOG_INFO("{} cheats are turned on for {}", cheat::enabled_cheat_count(emuenv.cheat), emuenv.io.title_id);
+    }
+}
+
 static ExitCode load_app_impl(SceUID &main_module_id, EmuEnvState &emuenv, const AppLaunchRequest &launch_request) {
     const auto call_import = [&emuenv](CPUState &cpu, uint32_t nid, SceUID thread_id) {
-        ::call_import(emuenv, cpu, nid, thread_id);
+        return ::call_import(emuenv, cpu, nid, thread_id);
     };
     emuenv.kernel.process_exit_callback = [&emuenv](int res, std::optional<AppLaunchRequest> relaunch) {
-        emuenv.post_app_launch_request(relaunch.value_or(AppLaunchRequest{ .reason = AppLaunchReason::ProcessExit }));
+        emuenv.post_app_launch_request(relaunch.value_or(AppLaunchRequest{ .reason = AppLaunchReason::ProcessExit, .exit_code = res }));
     };
     if (!emuenv.kernel.init(emuenv.mem, call_import, emuenv.cfg.current_config.cpu_opt)) {
         LOG_WARN("Failed to init kernel!");
@@ -483,6 +530,7 @@ static ExitCode load_app_impl(SceUID &main_module_id, EmuEnvState &emuenv, const
         sfo::load(emuenv.sfo_handle, param_sfo);
 
     init_exported_vars(emuenv);
+    create_system_font_blocks(emuenv);
 
     // Load main executable
     if (!launch_request.self_path.empty()) {
@@ -496,9 +544,23 @@ static ExitCode load_app_impl(SceUID &main_module_id, EmuEnvState &emuenv, const
     if (main_module_id >= 0) {
         const auto module = emuenv.kernel.loaded_modules[main_module_id];
         LOG_INFO("Main executable {} ({}) loaded", module->info.module_name, emuenv.self_path);
-        const Patches patches = get_patches(emuenv.patch_path, emuenv.io.title_id, "app0:" + emuenv.self_path);
+        uint32_t module_nid = 0;
+        {
+            const std::lock_guard<std::mutex> guard(emuenv.kernel.export_nids_mutex);
+            for (const auto &[nid, uid] : emuenv.kernel.module_uid_by_nid) {
+                if (uid == static_cast<uint32_t>(main_module_id))
+                    module_nid = nid;
+            }
+        }
+        LOG_INFO("Main executable NID: {} (for the NID attribute of a patch)", fmt::format("0x{:08X}", module_nid));
+
+        const std::string bin = "app0:" + emuenv.self_path;
+        Patches patches = get_patches(emuenv.patch_path, emuenv.io.title_id, bin);
+        const Patches xml_patches = get_xml_patches(emuenv.patch_path, emuenv.io.title_id, bin, emuenv.app_info.app_version, module_nid);
+        patches.insert(patches.end(), xml_patches.begin(), xml_patches.end());
         if (!patches.empty())
             do_patches(emuenv.mem, patches, module->info);
+        load_cheats(emuenv, module->info);
     } else
         return FileNotFound;
     // Set self name from self path, can contain folder, get file name only
@@ -668,7 +730,8 @@ ExitCode load_app(int32_t &main_module_id, EmuEnvState &emuenv, const AppLaunchR
     }
 
     if (emuenv.cfg.gdbstub) {
-        emuenv.kernel.debugger.wait_for_debugger = true;
+        // The threads wait for the debugger's first continue
+        emuenv.kernel.set_threads_suspended(true);
         server_open(emuenv);
     }
 
@@ -717,12 +780,24 @@ ExitCode run_app(EmuEnvState &emuenv, int32_t main_module_id, const AppLaunchReq
             affinity = *affinity_ptr.get(emuenv.mem);
         }
     }
-    const ThreadStatePtr main_thread = emuenv.kernel.create_thread(emuenv.mem, emuenv.io.title_id.c_str(), entry_point, priority, affinity, stack_size, nullptr);
+    // A main thread without its own affinity runs on every user core and reports them all
+    if (affinity == SCE_KERNEL_THREAD_CPU_AFFINITY_MASK_DEFAULT)
+        affinity = SCE_KERNEL_CPU_MASK_USER_ALL;
+    const ThreadStateRef main_thread = emuenv.kernel.create_thread(emuenv.mem, emuenv.io.title_id.c_str(), entry_point, priority, affinity, stack_size, 0);
     if (!main_thread) {
         LOG_ERROR("Failed to init main thread.");
         return InitThreadFailed;
     }
     emuenv.main_thread_id = main_thread->id;
+
+    // Before any guest code runs, module_start functions included, since they can read it too
+    emuenv.set_launch_uri(emuenv.cfg.launch_uri);
+
+    // Before any guest code runs, since it may wait for a vblank or register a vblank callback
+    start_sync_thread(emuenv);
+
+    // Before any guest code runs
+    gxm::init_compat_mask(emuenv, main_thread->id);
 
     // Run `module_start` export (entry point) of loaded libraries
     for (auto &[_, module] : emuenv.kernel.loaded_modules) {
@@ -751,8 +826,6 @@ ExitCode run_app(EmuEnvState &emuenv, int32_t main_module_id, const AppLaunchReq
         LOG_ERROR("Failed to run main thread.");
         return RunThreadFailed;
     }
-
-    start_sync_thread(emuenv);
 
     return Success;
 }

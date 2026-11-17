@@ -226,7 +226,7 @@ EXPORT(SceInt, sceHttpCreateConnectionWithURL, SceInt tmplId, const char *url, S
         }
         case SCE_HTTP_ERROR_OUT_OF_SIZE: return RET_ERROR(SCE_HTTP_ERROR_OUT_OF_SIZE);
         default:
-            LOG_WARN("Returning missing case of parse_url {}", (int)parseRet);
+            LOG_WARN("Returning missing case of parse_url {}", static_cast<int>(parseRet));
             assert(false);
             return parseRet;
         }
@@ -264,7 +264,7 @@ EXPORT(SceInt, sceHttpCreateConnectionWithURL, SceInt tmplId, const char *url, S
     };
     addrinfo *result = { 0 };
 
-    const ThreadStatePtr thread = emuenv.kernel.get_thread(thread_id);
+    const ThreadStateRef thread = emuenv.kernel.get_thread(thread_id);
 
     auto ret = getaddrinfo(parsed.hostname.c_str(), port.c_str(), &hints, &result);
     if (ret < 0) {
@@ -274,7 +274,7 @@ EXPORT(SceInt, sceHttpCreateConnectionWithURL, SceInt tmplId, const char *url, S
             // Even if we didnt get the ip, we should send the ip obtained callback
             for (auto &callback : emuenv.netctl.callbacks) {
                 if (callback.pc != 0) {
-                    thread->run_callback(callback.pc, { SCE_NET_CTL_EVENT_TYPE_IPOBTAINED, callback.arg });
+                    thread->call_guest(callback.pc, { SCE_NET_CTL_EVENT_TYPE_IPOBTAINED, callback.arg });
                 }
             }
             // Need to push the connection here so the id exists when "sending" the request
@@ -290,7 +290,7 @@ EXPORT(SceInt, sceHttpCreateConnectionWithURL, SceInt tmplId, const char *url, S
     // We got the ip, send the IPOPBTAINED callback event
     for (auto &callback : emuenv.netctl.callbacks) {
         if (callback.pc != 0) {
-            thread->run_callback(callback.pc, { SCE_NET_CTL_EVENT_TYPE_IPOBTAINED, callback.arg });
+            thread->call_guest(callback.pc, { SCE_NET_CTL_EVENT_TYPE_IPOBTAINED, callback.arg });
         }
     }
 
@@ -329,7 +329,7 @@ EXPORT(SceInt, sceHttpCreateConnectionWithURL, SceInt tmplId, const char *url, S
 
         long verify_flag = SSL_get_verify_result((SSL *)tmpl->second.ssl);
         if (verify_flag != X509_V_OK && verify_flag != X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY)
-            LOG_ERROR("Certificate verification error ({}) but continuing...\n", (int)verify_flag);
+            LOG_ERROR("Certificate verification error ({}) but continuing...\n", static_cast<int>(verify_flag));
     }
 
     emuenv.http.connections.emplace(connId, SceConnection{ tmplId, urlStr, enableKeepalive, isSecure, sockfd });
@@ -408,7 +408,7 @@ EXPORT(SceInt, sceHttpCreateRequestWithURL, SceInt connId, SceHttpMethods method
         }
         case SCE_HTTP_ERROR_OUT_OF_SIZE: return RET_ERROR(SCE_HTTP_ERROR_OUT_OF_SIZE);
         default:
-            LOG_WARN("Returning missing case of parse_url {}", (int)parseRet);
+            LOG_WARN("Returning missing case of parse_url {}", static_cast<int>(parseRet));
             assert(false);
             return parseRet;
         }
@@ -1448,7 +1448,7 @@ EXPORT(SceInt, sceHttpUriParse, SceHttpUriElement *out, const char *srcUrl, Ptr<
         }
         case SCE_HTTP_ERROR_OUT_OF_SIZE: return RET_ERROR(SCE_HTTP_ERROR_OUT_OF_SIZE);
         default:
-            LOG_WARN("Returning missing case of parse_url {}", (int)parseRet);
+            LOG_WARN("Returning missing case of parse_url {}", static_cast<int>(parseRet));
             assert(false);
             return parseRet;
         }

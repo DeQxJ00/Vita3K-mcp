@@ -88,6 +88,8 @@ bool AppSessionController::initialize_renderer(renderer::FrameHost &frame) {
         return false;
     }
 
+    emuenv.renderer->app_session_controller = *this;
+
     apply_renderer_config(emuenv);
     renderer_initialized = true;
     return true;
@@ -139,20 +141,30 @@ bool AppSessionController::load_and_run() {
 }
 
 bool AppSessionController::set_pause_reason(const AppSessionPauseReason reason, const bool enabled) {
-    std::lock_guard<std::mutex> lock(mutex);
-    if (current_phase.load(std::memory_order_relaxed) != AppSessionPhase::Running)
-        return false;
+    std::function<void()> callback_to_invoke = {};
 
-    const uint32_t mask = to_pause_mask(reason);
-    const uint32_t current_reasons = active_pause_reasons.load(std::memory_order_relaxed);
-    const uint32_t next_reasons = enabled
-        ? (current_reasons | mask)
-        : (current_reasons & ~mask);
-    if (next_reasons == current_reasons)
-        return true;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (current_phase.load(std::memory_order_relaxed) != AppSessionPhase::Running)
+            return false;
 
-    active_pause_reasons.store(next_reasons, std::memory_order_release);
-    apply_runtime_state_locked();
+        const uint32_t mask = to_pause_mask(reason);
+        const uint32_t current_reasons = active_pause_reasons.load(std::memory_order_relaxed);
+        const uint32_t next_reasons = enabled
+            ? (current_reasons | mask)
+            : (current_reasons & ~mask);
+        if (next_reasons == current_reasons)
+            return true;
+
+        active_pause_reasons.store(next_reasons, std::memory_order_release);
+        apply_runtime_state_locked();
+        callback_to_invoke = pause_state_changed_callback;
+    }
+
+    // Invoked outside the lock so frontend callbacks can safely call back into this controller.
+    if (callback_to_invoke)
+        callback_to_invoke();
+
     return true;
 }
 
@@ -169,6 +181,22 @@ bool AppSessionController::set_input_intercepted(const bool enabled) {
     return true;
 }
 
+bool AppSessionController::stop_requested() {
+    std::lock_guard<std::mutex> lock(mutex);
+    return stop_requested_flag.load(std::memory_order_relaxed);
+}
+
+void AppSessionController::reset_stop_request() {
+    std::lock_guard<std::mutex> lock(mutex);
+    stop_requested_flag.store(false, std::memory_order_relaxed);
+}
+
+void AppSessionController::request_stop() {
+    std::lock_guard<std::mutex> lock(mutex);
+    stop_requested_flag.store(true, std::memory_order_relaxed);
+}
+
+// Has to be called from the main thread
 void AppSessionController::stop(const AppSessionStopReason reason) {
     std::optional<std::reference_wrapper<renderer::FrameHost>> active_frame_host;
     bool renderer_was_initialized = false;
@@ -185,6 +213,7 @@ void AppSessionController::stop(const AppSessionStopReason reason) {
         renderer_was_initialized = renderer_initialized || static_cast<bool>(emuenv.renderer);
         runtime_was_initialized = runtime_initialized;
         app_started = phase == AppSessionPhase::Running;
+        stop_requested_flag.store(false, std::memory_order_relaxed);
         set_phase(AppSessionPhase::Stopping);
     }
 
@@ -218,15 +247,19 @@ void AppSessionController::stop(const AppSessionStopReason reason) {
     }
 }
 
+const std::string AppSessionController::get_active_app_title() {
+    std::lock_guard<std::mutex> lock(mutex);
+    return emuenv.current_app_title;
+}
+
+void AppSessionController::set_pause_state_changed_callback(std::function<void()> callback) {
+    std::lock_guard<std::mutex> lock(mutex);
+    pause_state_changed_callback = std::move(callback);
+}
+
 void AppSessionController::apply_runtime_state_locked() {
     const bool paused = active_pause_reasons.load(std::memory_order_relaxed) != 0;
-    const bool currently_paused = emuenv.kernel.is_threads_paused();
-    if (currently_paused != paused) {
-        if (paused)
-            emuenv.kernel.pause_threads();
-        else
-            emuenv.kernel.resume_threads();
-    }
+    emuenv.kernel.set_threads_paused(paused);
 
     if (emuenv.audio.adapter)
         emuenv.audio.switch_state(paused);
@@ -252,6 +285,7 @@ void AppSessionController::reset_session_tracking() {
     frame_host.reset();
     active_launch_request = {};
     active_pause_reasons.store(0, std::memory_order_release);
+    stop_requested_flag.store(false, std::memory_order_relaxed);
     renderer_initialized = false;
     runtime_initialized = false;
     input_intercepted = false;

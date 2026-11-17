@@ -100,6 +100,7 @@ public:
     QString log_uniforms;
     QString color_surface_debug;
     QString validation_layer;
+    QString disable_mask_bit;
     QString dump_elfs;
     QString gb_debug_tracy_section;
     QString tracy_primitive_impl;
@@ -113,6 +114,7 @@ public:
     QString confirm_exit_app;
     QString warn_admin_privileges;
     QString windows_rounded_corners;
+    QString remember_game_window_size;
     QString log_buffer_size;
     QString log_font;
     QString gui_stylesheet;

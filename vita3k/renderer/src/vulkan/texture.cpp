@@ -184,8 +184,7 @@ void VKTextureCache::prepare_staging_buffer(bool is_configure) {
     // if we are not using the previous buffer, we wait if the buffer was used at least once,
     // less than MAX_FRAMES_RENDERING frames ago and we have not yet waited for its fence
     const bool need_wait = !use_previous_buffer
-        && staging_buffer->frame_timestamp != ~0
-        && staging_buffer->frame_timestamp > context->frame_timestamp - MAX_FRAMES_RENDERING
+        && is_frame_timestamp_in_flight(staging_buffer->frame_timestamp, state.frame_timestamp)
         && staging_buffer->scene_timestamp > last_waited_scene;
     const vk::Fence current_fence = context->next_fence;
 
@@ -199,7 +198,10 @@ void VKTextureCache::prepare_staging_buffer(bool is_configure) {
 
             vk::SubmitInfo submit_info{};
             submit_info.setCommandBuffers(context->cmdbuffers_to_submit);
-            state.general_queue.submit(submit_info, current_fence);
+            {
+                std::lock_guard<std::mutex> lock(state.queue_mutex);
+                state.general_queue.submit(submit_info, current_fence);
+            }
             context->cmdbuffers_to_submit.clear();
 
             auto result = state.device.waitForFences(current_fence, VK_TRUE, std::numeric_limits<uint64_t>::max());
@@ -237,7 +239,7 @@ void VKTextureCache::prepare_staging_buffer(bool is_configure) {
     cmd_buffer = context->prerender_cmd;
     if (!use_previous_buffer) {
         staging_buffer->scene_timestamp = current_scene_timestamp;
-        staging_buffer->frame_timestamp = context->frame_timestamp;
+        staging_buffer->frame_timestamp = state.frame_timestamp;
         staging_buffer->waiting_fence = current_fence;
         staging_buffer->used_so_far = 0;
 
@@ -290,9 +292,8 @@ bool VKTextureCache::init(const bool hashless_texture_cache, const fs::path &tex
     support_e5rgb9 = static_cast<bool>(e5rgb9_support.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImage);
     support_a2rgb10 = static_cast<bool>(a2rgb10_support.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImage);
 
-    // powerVR only
-    const vk::FormatProperties pvrt_support = state.physical_device.getFormatProperties(vk::Format::ePvrtc12BppUnormBlockIMG);
-    support_pvrt = static_cast<bool>(pvrt_support.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImage);
+    // TODO: PVRTC is mapped to RGBA8, so keep software decoding until native PVRTC formats are mapped.
+    support_pvrt = false;
 
     // check for dxt support
     const vk::FormatProperties dxt_support = state.physical_device.getFormatProperties(vk::Format::eBc1RgbaSrgbBlock);
@@ -586,7 +587,7 @@ void VKTextureCache::configure_sampler(size_t index, const SceGxmTexture &textur
         .mipLodBias = (static_cast<float>(texture.lod_bias) - 31.f) / 8.f,
         .maxAnisotropy = static_cast<float>(anisotropic_filtering),
         .compareEnable = VK_FALSE,
-        .minLod = static_cast<float>(texture.lod_min0 | (texture.lod_min1 << 2)),
+        .minLod = static_cast<float>(texture.true_lod_min()),
         .maxLod = VK_LOD_CLAMP_NONE,
         .unnormalizedCoordinates = VK_FALSE,
     };

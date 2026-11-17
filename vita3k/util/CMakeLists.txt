@@ -2,7 +2,6 @@ add_library(
 	util
 	STATIC
 	src/android_driver.cpp
-	src/arm.cpp
 	src/float_to_half.cpp
 	src/fs_utils.cpp
 	src/hash.cpp
@@ -10,6 +9,7 @@ add_library(
 	src/logging.cpp
 	src/net_utils.cpp
 	src/string_utils.cpp
+	src/sysinfo.cpp
 	src/tracy.cpp
 	src/vita_theme_utils.cpp
 )
@@ -17,10 +17,21 @@ add_library(
 # vc_runtime_checker.cpp is directly added from the main CMakeList (for some reason adding it here doesn't work)
 
 target_include_directories(util PUBLIC include)
-target_link_libraries(util PUBLIC ${Boost_LIBRARIES} fmt spdlog http mem)
+target_link_libraries(util PUBLIC fmt spdlog http mem)
 target_link_libraries(util PRIVATE libcurl crypto SDL3::SDL3)
 if(ANDROID)
 	target_link_libraries(util PUBLIC emuenv android xxHash::xxhash)
 	target_link_libraries(util PRIVATE adrenotools)
 endif()
 target_compile_definitions(util PRIVATE $<$<CONFIG:Debug,RelWithDebInfo>:TRACY_ENABLE>)
+
+if(NOT ANDROID)
+	add_executable(
+		util-tests
+		tests/intrusive_list_tests.cpp
+	)
+
+	target_include_directories(util-tests PRIVATE include)
+	target_link_libraries(util-tests PRIVATE googletest)
+	add_test(NAME util COMMAND util-tests)
+endif()

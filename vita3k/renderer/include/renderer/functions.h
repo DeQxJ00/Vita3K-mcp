@@ -176,6 +176,7 @@ namespace texture {
 void palette_texture_to_rgba_4(uint32_t *dst, const uint8_t *src, uint32_t width, uint32_t height, const uint32_t *palette);
 void palette_texture_to_rgba_8(uint32_t *dst, const uint8_t *src, uint32_t width, uint32_t height, const uint32_t *palette);
 void yuv420_texture_to_rgb(YUVConversionCache &cache, uint8_t *dst, const uint8_t *src, uint32_t width, uint32_t height, uint32_t layout_width, uint32_t layout_height, bool is_p3);
+void yuv422_texture_to_rgba(uint8_t *dst, const uint8_t *src, uint32_t width, uint32_t height, SceGxmTextureFormat fmt);
 const uint32_t *get_texture_palette(const SceGxmTexture &texture, const MemState &mem);
 
 // Assume fmt is a bcn format
@@ -255,6 +256,13 @@ void convert_U8U3U3U2_to_U8U8U8U8(void *dest, const void *data, const uint32_t w
 void convert_x8u24_to_u24x8(void *dest, const void *data, const uint32_t width, const uint32_t height);
 void convert_f32m_to_f32(void *dest, const void *data, const uint32_t width, const uint32_t height);
 void convert_u2f10f10f10_to_f16f16f16f16(void *dest, const void *data, const uint32_t width, const uint32_t height, const SceGxmTextureFormat format);
+
+// U1U5U5U5 textures keep their 1-bit field in bit 15 (ABGR, ARGB, 1BGR, 1RGB) or in
+// bit 0 (U5U5U5U1_RGBA/BGRA, U5U5U5X1_RGB1/BGR1, for which this returns true).
+// Uploads rotate the texels so that each backend sees a single layout.
+bool is_u5u5u5u1(const SceGxmTextureFormat format);
+void convert_u5u5u5u1_to_u1u5u5u5(void *dest, const void *data, const uint32_t width, const uint32_t height);
+void convert_u1u5u5u5_to_u5u5u5u1(void *dest, const void *data, const uint32_t width, const uint32_t height);
 
 void swizzled_texture_to_linear_texture(uint8_t *dest, const uint8_t *src, uint16_t width, uint16_t height, uint8_t bits_per_pixel);
 void tiled_texture_to_linear_texture(uint8_t *dest, const uint8_t *src, uint16_t width, uint16_t height, uint8_t bits_per_pixel);

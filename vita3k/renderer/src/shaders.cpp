@@ -34,20 +34,20 @@ namespace renderer {
 bool get_shaders_cache_hashs(State &renderer) {
     const std::string hash_file_name = fmt::format("hashs-{}.dat", (renderer.current_backend == Backend::OpenGL) ? "gl" : "vk");
 
-    fs::ifstream shaders_hashs(renderer.shaders_path / hash_file_name, std::ios::in | std::ios::binary);
+    std::ifstream shaders_hashs(renderer.shaders_path / hash_file_name, std::ios::in | std::ios::binary);
     if (!shaders_hashs.is_open())
         return false;
 
     renderer.shaders_cache_hashs.clear();
     // Read size of hashes list
     size_t size;
-    shaders_hashs.read((char *)&size, sizeof(size));
+    shaders_hashs.read(reinterpret_cast<char *>(&size), sizeof(size));
 
     // Check version of cache
     uint32_t versionInFile;
-    shaders_hashs.read((char *)&versionInFile, sizeof(uint32_t));
+    shaders_hashs.read(reinterpret_cast<char *>(&versionInFile), sizeof(uint32_t));
     uint32_t features_mask;
-    shaders_hashs.read((char *)&features_mask, sizeof(uint32_t));
+    shaders_hashs.read(reinterpret_cast<char *>(&features_mask), sizeof(uint32_t));
     if (versionInFile != shader::CURRENT_VERSION || features_mask != renderer.get_features_mask()) {
         shaders_hashs.close();
         fs::remove_all(renderer.shaders_path);
@@ -89,18 +89,18 @@ bool get_shaders_cache_hashs(State &renderer) {
 void save_shaders_cache_hashs(State &renderer, std::vector<ShadersHash> &shaders_cache_hashs) {
     fs::create_directories(renderer.shaders_path);
     std::string hash_file_name = fmt::format("hashs-{}.dat", (renderer.current_backend == Backend::OpenGL) ? "gl" : "vk");
-    fs::ofstream shaders_hashs(renderer.shaders_path / hash_file_name, std::ios::out | std::ios::binary);
+    std::ofstream shaders_hashs(renderer.shaders_path / hash_file_name, std::ios::out | std::ios::binary);
 
     if (shaders_hashs.is_open()) {
         // Write Size of shaders cache hashes list
         const auto size = shaders_cache_hashs.size();
-        shaders_hashs.write((const char *)&size, sizeof(size));
+        shaders_hashs.write(reinterpret_cast<const char *>(&size), sizeof(size));
 
         // Write version of cache
         const uint32_t versionInFile = shader::CURRENT_VERSION;
-        shaders_hashs.write((const char *)&versionInFile, sizeof(uint32_t));
+        shaders_hashs.write(reinterpret_cast<const char *>(&versionInFile), sizeof(uint32_t));
         const uint32_t features_mask = renderer.get_features_mask();
-        shaders_hashs.write((const char *)&features_mask, sizeof(uint32_t));
+        shaders_hashs.write(reinterpret_cast<const char *>(&features_mask), sizeof(uint32_t));
 
         // Write shader hash list
         for (const auto &hash : shaders_cache_hashs) {
@@ -116,12 +116,12 @@ void save_shaders_cache_hashs(State &renderer, std::vector<ShadersHash> &shaders
 }
 
 static bool load_shader(const fs::path &shader_name, char **destination, std::size_t &size_read) {
-    fs::ifstream is(shader_name, fs::ifstream::binary);
+    std::ifstream is(shader_name, std::ifstream::binary);
     if (!is) {
         return false;
     }
 
-    is.seekg(0, fs::ifstream::end);
+    is.seekg(0, std::ifstream::end);
     size_read = is.tellg();
     is.seekg(0);
 

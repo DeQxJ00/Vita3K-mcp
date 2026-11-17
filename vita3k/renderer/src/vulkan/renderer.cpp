@@ -39,7 +39,9 @@
 
 #include <algorithm>
 #include <mutex>
+#include <string_view>
 #include <unordered_set>
+#include <vector>
 
 #ifdef __APPLE__
 #include <MoltenVK/mvk_vulkan.h>
@@ -76,6 +78,19 @@ decltype(AHardwareBuffer_allocate) *_AHardwareBuffer_allocate;
 decltype(AHardwareBuffer_lock) *_AHardwareBuffer_lock;
 decltype(AHardwareBuffer_unlock) *_AHardwareBuffer_unlock;
 decltype(AHardwareBuffer_release) *_AHardwareBuffer_release;
+#endif
+
+#ifdef __APPLE__
+static vk::InstanceCreateFlags configure_portability_enumeration(std::vector<const char *> &extensions, bool supported) {
+    std::erase_if(extensions, [](const char *name) {
+        return std::string_view(name) == vk::KHRPortabilityEnumerationExtensionName;
+    });
+    if (!supported)
+        return {};
+
+    extensions.push_back(vk::KHRPortabilityEnumerationExtensionName);
+    return vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
+}
 #endif
 
 static void debug_log_message(std::string_view msg) {
@@ -212,7 +227,7 @@ static bool detect_patch_bcn(bool *support_dxt) {
 
 #if defined(__linux__) && !defined(__ANDROID__)
 static bool has_instance_extension(const std::vector<vk::ExtensionProperties> &available_extensions, const std::string_view target_name) {
-    return std::find_if(available_extensions.begin(), available_extensions.end(), [&](const vk::ExtensionProperties &ext) {
+    return std::ranges::find_if(available_extensions, [&](const vk::ExtensionProperties &ext) {
         return std::string_view(ext.extensionName.data()) == target_name;
     }) != available_extensions.end();
 }
@@ -359,6 +374,7 @@ VKState::VKState(int gpu_idx)
 
 bool VKState::init() {
     shader_version = fmt::format("v{}", shader::CURRENT_VERSION);
+    features.use_mask_bit = true;
     return true;
 }
 
@@ -392,18 +408,24 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
 
         std::vector<const char *> instance_extensions;
         instance_extensions.reserve(8);
-        instance_extensions.push_back(vk::KHRSurfaceExtensionName);
-#ifdef _WIN32
-        instance_extensions.push_back(vk::KHRWin32SurfaceExtensionName);
-#elif defined(__APPLE__)
-        instance_extensions.push_back(vk::EXTMetalSurfaceExtensionName);
-#elif defined(__ANDROID__)
-        instance_extensions.push_back(vk::KHRAndroidSurfaceExtensionName);
-#else
         auto *frame_host = this->renderer::State::frame;
-        if (!select_linux_surface_extension(*this, frame_host->handle(), instance_extensions))
-            return false;
+        if (const auto *provider = frame_host->vulkan_surface_provider()) {
+            instance_extensions = provider->instance_extensions();
+            if (instance_extensions.empty()) {
+                LOG_ERROR("The window gave no Vulkan instance extensions for its surface");
+                return false;
+            }
+        } else {
+            instance_extensions.push_back(vk::KHRSurfaceExtensionName);
+#ifdef _WIN32
+            instance_extensions.push_back(vk::KHRWin32SurfaceExtensionName);
+#elif defined(__APPLE__)
+            instance_extensions.push_back(vk::EXTMetalSurfaceExtensionName);
+#elif !defined(__ANDROID__)
+            if (!select_linux_surface_extension(*this, frame_host->handle(), instance_extensions))
+                return false;
 #endif
+        }
 
         const std::set<std::string> optional_instance_extensions = {
             vk::KHRGetPhysicalDeviceProperties2ExtensionName,
@@ -415,6 +437,9 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
 #endif
         };
         bool has_layer_settings_extension = false;
+#ifdef __APPLE__
+        bool has_portability_extension = false;
+#endif
         for (const vk::ExtensionProperties &prop : vk::enumerateInstanceExtensionProperties()) {
             auto ite = optional_instance_extensions.find(prop.extensionName);
             if (ite != optional_instance_extensions.end()) {
@@ -422,9 +447,15 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
 #ifdef __APPLE__
                 if (*ite == vk::EXTLayerSettingsExtensionName)
                     has_layer_settings_extension = true;
+                if (*ite == vk::KHRPortabilityEnumerationExtensionName)
+                    has_portability_extension = true;
 #endif
             }
         }
+
+#ifdef __APPLE__
+        const auto portability_flags = configure_portability_enumeration(instance_extensions, has_portability_extension);
+#endif
 
         // look if we can use the validation layer
         bool has_validation_layer = false;
@@ -486,8 +517,8 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
 
         vk::InstanceCreateInfo instance_info{
 #ifdef __APPLE__
-            .flags = vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR,
             .pNext = instance_create_pnext,
+            .flags = portability_flags,
 #endif
             .pApplicationInfo = &app_info,
         };
@@ -561,6 +592,24 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         physical_device_memory = physical_device.getMemoryProperties();
         physical_device_queue_families = physical_device.getQueueFamilyProperties();
 
+        const auto rgba4_features = physical_device.getFormatProperties(vk::Format::eR4G4B4A4UnormPack16).optimalTilingFeatures;
+        const auto required_rgba4_features = vk::FormatFeatureFlagBits::eSampledImage | vk::FormatFeatureFlagBits::eSampledImageFilterLinear
+            | vk::FormatFeatureFlagBits::eColorAttachment | vk::FormatFeatureFlagBits::eColorAttachmentBlend
+            | vk::FormatFeatureFlagBits::eBlitSrc | vk::FormatFeatureFlagBits::eBlitDst;
+        const auto rgba4_usages = vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst
+            | vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eInputAttachment;
+        vk::ImageFormatProperties rgba4_properties;
+        const auto rgba4_result = physical_device.getImageFormatProperties(vk::Format::eR4G4B4A4UnormPack16,
+            vk::ImageType::e2D, vk::ImageTiling::eOptimal, rgba4_usages, {}, &rgba4_properties);
+        if (rgba4_result != vk::Result::eSuccess && rgba4_result != vk::Result::eErrorFormatNotSupported) {
+            LOG_ERROR("Failed to query RGBA4444 surface support: {}", vk::to_string(rgba4_result));
+            return false;
+        }
+        support_native_rgba4_surface = rgba4_result == vk::Result::eSuccess
+            && (rgba4_features & required_rgba4_features) == required_rgba4_features;
+        LOG_INFO("Vulkan RGBA4444 optimal tiling features: {}; surface usage query: {}",
+            vk::to_string(rgba4_features), vk::to_string(rgba4_result));
+
 #ifdef __ANDROID__
         if (custom_driver_requested) {
             if (android_driver::is_custom_driver_loaded(
@@ -622,6 +671,7 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         bool support_buffer_device_address = false;
         bool support_external_memory = false;
         bool support_shader_interlock = false;
+        bool support_image_view_usage = false;
         const std::map<std::string_view, bool *> optional_extensions = {
             { vk::KHRGetMemoryRequirements2ExtensionName, &temp_bool },
             // can be used by vma to improve performance
@@ -630,6 +680,8 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
             { vk::EXTGlobalPriorityExtensionName, &support_global_priority },
             // can be used to specify which format will be used by mutable images
             { vk::KHRImageFormatListExtensionName, &surface_cache.support_image_format_specifier },
+            // allows sRGB views to exclude storage usage inherited from UNORM images
+            { vk::KHRMaintenance2ExtensionName, &support_image_view_usage },
             { vk::KHRExternalMemoryExtensionName, &temp_bool },
             { vk::KHRDeviceGroupExtensionName, &temp_bool },
             // can host memory directly be used for gxm memory
@@ -746,6 +798,10 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
         }
 
         support_shader_interlock &= static_cast<bool>(physical_device_features.fragmentStoresAndAtomics);
+        if (support_shader_interlock && !support_image_view_usage) {
+            LOG_WARN("Shader interlock disabled: VK_KHR_maintenance2 is required for separate sRGB attachment and UNORM storage views");
+            support_shader_interlock = false;
+        }
         if (support_shader_interlock) {
             auto props = physical_device.getFeatures2KHR<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT>();
             support_shader_interlock = static_cast<bool>(props.get<vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT>().fragmentShaderSampleInterlock);
@@ -914,8 +970,11 @@ bool VKState::create(std::unique_ptr<renderer::State> &state, const Config &conf
     }
 
     support_fsr &= static_cast<bool>(screen_renderer.surface_capabilities.supportedUsageFlags & vk::ImageUsageFlagBits::eStorage);
+    // The FSR storage shaders write rgba8; BGRA8 swapchain views are not format-compatible.
+    support_fsr &= screen_renderer.surface_format.format == vk::Format::eR8G8B8A8Unorm;
+    support_fsr &= static_cast<bool>(physical_device.getFormatProperties(screen_renderer.surface_format.format).optimalTilingFeatures & vk::FormatFeatureFlagBits::eStorageImage);
 
-    return true;
+    return init();
 }
 
 void VKState::late_init(const Config &cfg, const std::string_view game_id, MemState &mem) {
@@ -931,6 +990,10 @@ void VKState::late_init(const Config &cfg, const std::string_view game_id, MemSt
         features.direct_fragcolor = true;
         features.support_shader_interlock = false;
     }
+
+    LOG_INFO("Vulkan RGBA4444 render surfaces: {}",
+        features.support_shader_interlock ? "RGBA8 fallback (typed storage image required by shader interlock)"
+                                          : (support_native_rgba4_surface ? "native" : "RGBA8 fallback (native surface usages unsupported)"));
 
     // texture viewport is faster but not entirely accurate
     if (support_standard_layout && !use_high_accuracy) {
@@ -992,6 +1055,8 @@ void VKState::cleanup() {
     device.waitIdle();
 
     request_queue.abort();
+    if (gpu_request_wait_thread.joinable())
+        gpu_request_wait_thread.join();
 
     context = nullptr;
 
@@ -1075,7 +1140,9 @@ void VKState::cleanup() {
     gxp_ptr_map.clear();
     shaders_cache_hashs.clear();
     request_queue.reset();
+    frame_timestamp = 1;
     current_frame_idx = 1;
+    last_frame_waited = 0;
     last_scene_id = 0;
     shaders_count_compiled = 0;
     programs_count_pre_compiled = 0;
@@ -1257,7 +1324,7 @@ uint32_t VKState::get_features_mask() {
 }
 
 int VKState::get_supported_filters() {
-    int filters = static_cast<int>(Filter::NEAREST) | static_cast<int>(Filter::BILINEAR) | static_cast<int>(Filter::BICUBIC) | static_cast<int>(Filter::FXAA);
+    int filters = static_cast<int>(Filter::NEAREST) | static_cast<int>(Filter::BILINEAR) | static_cast<int>(Filter::BICUBIC) | static_cast<int>(Filter::FXAA) | static_cast<int>(Filter::SMAA);
     if (support_fsr)
         filters |= static_cast<int>(Filter::FSR);
     return filters;
@@ -1277,7 +1344,7 @@ bool VKState::map_memory(MemState &mem, Ptr<void> address, uint32_t size) {
     assert(features.enable_memory_mapping);
     // the address should be 4K aligned
     assert((address.address() & 4095) == 0);
-    constexpr vk::BufferUsageFlags mapped_memory_flags = vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eTransferDst;
+    constexpr vk::BufferUsageFlags mapped_memory_flags = vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eTransferSrc;
 
     auto find_mem_type_with_flag = [&](const vk::MemoryPropertyFlags flags, uint32_t hardware_types) {
         while (hardware_types != 0) {
@@ -1695,6 +1762,9 @@ renderer::VulkanDeviceInfo renderer::enumerate_vulkan_devices(const std::string 
 
         std::vector<const char *> instance_extensions;
         bool has_properties2 = false;
+#ifdef __APPLE__
+        bool has_portability_extension = false;
+#endif
         for (const vk::ExtensionProperties &prop : vk::enumerateInstanceExtensionProperties(nullptr, dispatch)) {
             const std::string_view name(prop.extensionName.data());
             if (name == vk::KHRGetPhysicalDeviceProperties2ExtensionName) {
@@ -1703,14 +1773,17 @@ renderer::VulkanDeviceInfo renderer::enumerate_vulkan_devices(const std::string 
             }
 #ifdef __APPLE__
             else if (name == vk::KHRPortabilityEnumerationExtensionName) {
-                instance_extensions.push_back(vk::KHRPortabilityEnumerationExtensionName);
+                has_portability_extension = true;
             }
 #endif
         }
 
+#ifdef __APPLE__
+        const auto portability_flags = configure_portability_enumeration(instance_extensions, has_portability_extension);
+#endif
         vk::InstanceCreateInfo instance_info{
 #ifdef __APPLE__
-            .flags = vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR,
+            .flags = portability_flags,
 #endif
             .pApplicationInfo = &app_info,
         };
@@ -1758,7 +1831,6 @@ void VKState::precompile_shader(const ShadersHash &hash) {
 
 void VKState::preclose_action() {
     // Stop the GPU request wait thread before destruction begins.
-    // VKState (owns the queue) is destroyed before VKContext (owns the thread).
     request_queue.abort();
 
     // make sure we are in a game
@@ -1788,6 +1860,23 @@ BufferTrapping::BufferTrapping(VKState &state)
     : state(state) {}
 
 TrappedBuffer *BufferTrapping::access_buffer(Address addr, uint32_t size, MemState &mem, bool always_trap, bool cover_everything) {
+    // The declared size is an upper bound, not what the game allocated: copy the part that is
+    // mapped rather than refusing the whole buffer
+    {
+        auto mem_it = state.mapped_memories.lower_bound(addr);
+        if (mem_it == state.mapped_memories.end() || mem_it->first + mem_it->second.size <= addr) {
+            LOG_ERROR("Buffer at address {} is not mapped", log_hex(addr));
+            temp_buffer.size = 0;
+            temp_buffer.extra = ~0;
+            return &temp_buffer;
+        }
+        const uint32_t available = mem_it->first + mem_it->second.size - addr;
+        if (size > available) {
+            LOG_WARN_ONCE("Buffer at address {} ({} bytes) runs past its mapped block, copying the {} bytes that are mapped", log_hex(addr), size, available);
+            size = available;
+        }
+    }
+
     const bool is_buffer_small = (size < 3 * KiB(4));
 
     if (is_buffer_small && always_trap) {

@@ -35,18 +35,20 @@
 #include <cctype>
 #include <exception>
 #include <iostream>
+#include <map>
+#include <system_error>
 #include <vector>
 
 namespace config {
 static bool is_numeric_scalar(const YAML::Node &node) {
-    if (!node.IsScalar())
+    if (!node.IsDefined() || !node.IsScalar())
         return false;
 
     const std::string value = node.Scalar();
     if (value.empty())
         return false;
 
-    return std::all_of(value.begin(), value.end(), [](const unsigned char c) {
+    return std::ranges::all_of(value, [](const unsigned char c) {
         return std::isdigit(c) != 0;
     });
 }
@@ -164,7 +166,9 @@ static void check_members(Config &self, const Config &rhs) {
     self.load_config = rhs.load_config;
     self.fullscreen = rhs.fullscreen;
     self.console = rhs.console;
+    self.frontend = rhs.frontend;
     self.app_args = rhs.app_args;
+    self.launch_uri = rhs.launch_uri;
     self.load_app_list = rhs.load_app_list;
     self.self_path = rhs.self_path;
 }
@@ -214,33 +218,64 @@ static YAML::Node get(const Config &self) {
 
 // Load a function to the node network, and then update the members
 static bool load_new_config(Config &self, const fs::path &path) {
-    fs::ifstream fin(path);
+    std::ifstream fin(path);
     YAML::Node yaml_node = YAML::Load(fin);
     const bool legacy_keyboard_bindings = has_legacy_keyboard_bindings(yaml_node);
     update_members(self, yaml_node);
     return legacy_keyboard_bindings;
 }
 
-static std::set<std::string> get_file_set(const fs::path &loc, bool dirs_only = true) {
-    std::set<std::string> cur_set{};
-    if (!fs::exists(loc)) {
-        return cur_set;
-    }
+static std::string transform_installed_app_id(std::string &value, const fs::path &installed_apps_path) {
+    std::vector<std::string> installed_apps;
+    std::error_code err{};
+    const bool installed_apps_path_exists = fs::exists(installed_apps_path, err);
+    if (err)
+        return "Failed to inspect installed apps directory: " + err.message();
 
-    fs::directory_iterator it{ loc };
-    while (it != fs::directory_iterator{}) {
-        if (dirs_only) {
-            if (!it->path().empty() && fs::is_directory(it->path())) {
-                cur_set.insert(it->path().stem().string());
+    if (installed_apps_path_exists) {
+        fs::directory_iterator it{ installed_apps_path, err };
+        if (err)
+            return "Failed to open installed apps directory: " + err.message();
+
+        while (it != fs::directory_iterator{}) {
+            const auto app_path = it->path();
+            if (!app_path.empty()) {
+                const bool is_app_directory = fs::is_directory(app_path, err);
+                if (err == std::errc::no_such_file_or_directory)
+                    err.clear();
+                else if (err)
+                    return "Failed to inspect installed app directory: " + err.message();
+                const auto app_name{ app_path.filename().string() };
+                if (is_app_directory && !app_name.ends_with("_dec"))
+                    installed_apps.push_back(app_name);
             }
-        } else {
-            cur_set.insert(it->path().stem().string());
-        }
 
-        boost::system::error_code err{};
-        it.increment(err);
+            it.increment(err);
+            if (err)
+                return "Failed to scan installed apps directory: " + err.message();
+        }
     }
-    return cur_set;
+
+    for (const auto &app : installed_apps) {
+        if (app == value)
+            return {};
+    }
+
+    const auto key = string_utils::toupper(value);
+    const std::string *matched_app = nullptr;
+    for (const auto &app : installed_apps) {
+        if (string_utils::toupper(app) != key)
+            continue;
+        if (matched_app)
+            return "Ambiguous installed app ID " + value + ", use the exact directory name";
+        matched_app = &app;
+    }
+
+    if (!matched_app)
+        return "No installed app matches " + value;
+
+    value = *matched_app;
+    return {};
 }
 
 static fs::path check_path(const fs::path &output_path) {
@@ -305,7 +340,7 @@ ExitCode serialize_config(Config &cfg, const fs::path &output_path) {
     emitter << out_node;
     emitter << YAML::EndDoc;
 
-    fs::ofstream fo(output);
+    std::ofstream fo(output);
     if (!fo) {
         return InvalidApplicationPath;
     }
@@ -328,7 +363,10 @@ ExitCode init_config(Config &cfg, int argc, char **argv, const Root &root_paths,
 
     // Declare all options
     CLI::App app{ "Vita3K Command Line Interface" }; // "--help,-h" is automatically generated
+#ifdef _WIN32
+    // Elsewhere this would take absolute paths for options
     app.allow_windows_style_options();
+#endif
     app.allow_extras();
     app.enabled_by_default();
     app.get_formatter()->column_width(38);
@@ -347,16 +385,27 @@ ExitCode init_config(Config &cfg, int argc, char **argv, const Root &root_paths,
        ->default_val(false)->group("Input");
     input->add_option("--app-args,-Z", command_line.app_args, "Argument for app, use ', ' to separate arguments.")
         ->default_str("")->group("Input");
+    input->add_option("--launch-uri", command_line.launch_uri, "URI the app gets from sceAppMgrGetAppParam, as if another app launched it with it, like psgm:play?titleid=PCSA00000&arg=1")
+        ->default_str("")->group("Input");
     input->add_option("--load-app-list,-a", command_line.load_app_list, "Starts the emulator with load app list.")
        ->default_val(false)->group("Input");
+    const std::map<std::string, Frontend> frontends{ { "qt", Frontend::qt }, { "sdl", Frontend::sdl } };
+    input->add_option("--frontend", command_line.frontend, "Frontend to use: qt for the full interface, sdl for a plain window that runs the app given by -r and quits with it")
+        ->transform(CLI::CheckedTransformer(frontends, CLI::ignore_case))->default_str("qt")->group("Input");
     input->add_option("--self,-S", command_line.self_path, "Path to the self to run inside Title ID")
         ->default_str("eboot.bin")->group("Input");
+    const CLI::Validator installed_app_transformer{
+        [&cfg](std::string &value) {
+            return transform_installed_app_id(value, cfg.get_vita_fs_path() / "ux0/app");
+        },
+        "installed app title ID"
+    };
     input->add_option("--installed-path,-r", command_line.run_app_path, "Path to the installed app to run")
-        ->default_str({})->check(CLI::IsMember(get_file_set(cfg.get_vita_fs_path() / "ux0/app")))->group("Input");
+        ->default_str({})->transform(installed_app_transformer)->group("Input");
     input->add_option("--recompile-shader,-s", command_line.recompile_shader_path, "Recompile the given PS Vita shader (GXP format) to SPIR_V / GLSL and quit")
         ->default_str({})->group("Input");
     input->add_option("--deleted-id,-d", command_line.delete_title_id, "Title ID of installed app to delete")
-        ->default_str({})->check(CLI::IsMember(get_file_set(cfg.get_vita_fs_path() / "ux0/app")))->group("Input");
+        ->default_str({})->transform(installed_app_transformer)->group("Input");
     input->add_option("--firmware", command_line.pup_path, "Path to the firmware file (.pup extension) to install");
     auto input_pkg = input->add_option("--pkg", command_line.pkg_path, "Path to the app file (.pkg extension) to install")
         ->default_str({})->group("Input");

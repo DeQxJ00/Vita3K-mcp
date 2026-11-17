@@ -19,19 +19,21 @@
 #include <tracy/Tracy.hpp>
 #endif
 
+#include <cpu/arm.h>
 #include <cpu/common.h>
 #include <kernel/state.h>
 #include <mem/functions.h>
 
 #include <kernel/thread/thread_state.h>
 
-#include <cpu/functions.h>
+#include <cpu/state.h>
 #include <mem/ptr.h>
-#include <util/lock_and_find.h>
 #include <util/log.h>
 
 #include <SDL3/SDL_mutex.h>
 #include <SDL3/SDL_thread.h>
+
+#include <utility>
 
 int CorenumAllocator::new_corenum() {
     const std::lock_guard<std::mutex> guard(lock);
@@ -53,18 +55,19 @@ void CorenumAllocator::set_max_core_count(const std::size_t max) {
 // TODO implement cross platform debug thread name setter and eliminate SDL thread
 struct ThreadParams {
     KernelState *kernel = nullptr;
-    SceUID thid = SCE_KERNEL_ERROR_ILLEGAL_THREAD_ID;
+    // Passed in rather than looked up, since the guest may delete the thread before it starts
+    ThreadStateRef thread;
     SDL_Semaphore *host_may_destroy_params = nullptr;
 };
 
 static int SDLCALL thread_function(void *data) {
     assert(data != nullptr);
-    const ThreadParams params = *static_cast<const ThreadParams *>(data);
+    ThreadParams params = *static_cast<const ThreadParams *>(data);
     SDL_SignalSemaphore(params.host_may_destroy_params);
-    const ThreadStatePtr thread = params.kernel->get_thread(params.thid);
+    ThreadStateRef thread = std::move(params.thread);
 #ifdef TRACY_ENABLE
-    if (!thread->name.empty()) {
-        tracy::SetThreadName(thread->name.c_str());
+    if (thread->name[0] != '\0') {
+        tracy::SetThreadName(thread->name);
     } else {
         std::string th_name = "TID:" + std::to_string(thread->id);
         tracy::SetThreadName(th_name.c_str());
@@ -72,12 +75,16 @@ static int SDLCALL thread_function(void *data) {
 #endif
 
     thread->run_loop();
-    const uint32_t r0 = read_reg(*thread->cpu, 0);
+    const uint32_t r0 = thread->cpu->get_reg(0);
+    const SceUID id = thread->id;
+    const int processor_id = thread->cpu->processor_id;
+    // release our reference first so the erase below destroys the ThreadState before process_exit() is woken
+    thread = nullptr;
 
     {
         std::lock_guard<std::mutex> lock(params.kernel->mutex);
-        params.kernel->threads.erase(thread->id);
-        params.kernel->corenum_allocator.free_corenum(get_processor_id(*thread->cpu));
+        params.kernel->threads.erase(id);
+        params.kernel->corenum_allocator.free_corenum(processor_id);
         params.kernel->thread_deleted_cond.notify_all();
     }
 
@@ -89,6 +96,7 @@ KernelState::KernelState()
 }
 
 bool KernelState::init(MemState &mem, const CallImportFunc &call_import, bool cpu_opt) {
+    timers.start();
     corenum_allocator.set_max_core_count(MAX_CORE_COUNT);
     start_tick = rtc_get_ticks(rtc_base_ticks());
     base_tick = { rtc_base_ticks() };
@@ -98,9 +106,8 @@ bool KernelState::init(MemState &mem, const CallImportFunc &call_import, bool cp
     // Generate halt instruction (NOP + WFI)
     halt_instruction = alloc_block(mem, 4, "halt_instruction");
     const auto halt_ptr = halt_instruction.get_ptr<uint16_t>().get(mem);
-    halt_ptr[0] = 0xBF00; // NOP
-    halt_ptr[1] = 0xBF30; // WFI
-    halt_instruction_pc = halt_instruction.get() | 1; // thumb mode pc
+    halt_ptr[0] = arm::THUMB_NOP;
+    halt_ptr[1] = arm::THUMB_WFI;
 
     return true;
 }
@@ -122,11 +129,11 @@ void KernelState::set_memory_watch(bool enabled) {
     std::lock_guard<std::mutex> lock(mutex);
     for (const auto &thread : threads) {
         auto &cpu = *thread.second->cpu;
-        if (enabled != get_log_mem(cpu)) {
+        if (enabled != cpu.get_log_mem()) {
             if (enabled)
-                set_log_mem(cpu, true);
+                cpu.set_log_mem(true);
             else
-                set_log_mem(cpu, false);
+                cpu.set_log_mem(false);
         }
     }
 }
@@ -134,34 +141,59 @@ void KernelState::set_memory_watch(bool enabled) {
 void KernelState::invalidate_jit_cache(Address start, size_t length) {
     std::lock_guard<std::mutex> lock(mutex);
     for (const auto &[_, thread] : threads) {
-        ::invalidate_jit_cache(*thread->cpu, start, length);
+        thread->cpu->invalidate_jit_cache(start, length);
     }
 }
 
-ThreadStatePtr KernelState::get_thread(SceUID thread_id) {
-    return lock_and_find(thread_id, threads, mutex);
+uint64_t KernelState::process_time_at(uint64_t clock_time) const {
+    // The process started at the host clock time start_tick - base_tick.tick
+    return clock_time - (start_tick - base_tick.tick);
 }
 
-ThreadStatePtr KernelState::create_thread(MemState &mem, const char *name, Ptr<const void> entry_point) {
-    return create_thread(mem, name, entry_point, SCE_KERNEL_DEFAULT_PRIORITY, SCE_KERNEL_THREAD_CPU_AFFINITY_MASK_DEFAULT, SCE_KERNEL_STACK_SIZE_USER_MAIN, nullptr);
-}
-
-ThreadStatePtr KernelState::create_thread(MemState &mem, const char *name, Ptr<const void> entry_point, int init_priority, SceInt32 affinity_mask, int stack_size, const SceKernelThreadOptParam *option) {
-    ThreadStatePtr thread = std::make_shared<ThreadState>(get_next_uid(), *this, mem);
-    if (thread->init(name, entry_point, init_priority, affinity_mask, stack_size, option) < 0)
+ThreadStateRef KernelState::get_thread(SceUID thread_id) {
+    ThreadStateRef thread;
+    {
+        const std::lock_guard<std::mutex> lock(mutex);
+        if (const auto it = threads.find(thread_id); it != threads.end())
+            thread = it->second;
+    }
+    // A deleted thread stays in threads until its host thread ends, but guest calls can't find it
+    if (thread && thread->get_status() == ThreadStatus::deleted)
         return nullptr;
+    return thread;
+}
+
+ThreadStateRef KernelState::create_thread(MemState &mem, const char *name, Ptr<const void> entry_point, int init_priority, SceInt32 affinity_mask, int stack_size, SceUInt32 attr) {
+    const SceUID id = get_next_uid();
+    int core_num = corenum_allocator.new_corenum();
+    if (core_num < 0) {
+        LOG_ERROR("Out of core number to allocate, use 0");
+        core_num = 0;
+    }
+    CPUStatePtr cpu = init_cpu(cpu_opt, id, static_cast<std::size_t>(core_num), mem);
+    if (!cpu)
+        return nullptr;
+    // A guest function the kernel calls returns to the halt instruction, in Thumb mode
+    cpu->return_pc = halt_instruction.get() | arm::THUMB_BIT;
+    cpu->set_log_code(debugger.watch_code);
+    cpu->set_log_mem(debugger.watch_memory);
+    ThreadStateRef thread = Ref<ThreadState>::make(id, *this, mem, std::move(cpu), name, entry_point.address(), init_priority, affinity_mask, stack_size, attr);
 
     {
         const std::lock_guard<std::mutex> lock(mutex);
         threads.emplace(thread->id, thread);
+        // A new thread starts with the debugger's hold every thread has, and sees the pause too
+        thread->set_suspended(threads_suspended);
+        if (process_exiting)
+            thread->remove();
     }
 
     ThreadParams params;
     params.kernel = this;
-    params.thid = thread->id;
+    params.thread = thread;
 
     params.host_may_destroy_params = SDL_CreateSemaphore(0);
-    SDL_DetachThread(SDL_CreateThread(&thread_function, thread->name.c_str(), &params));
+    SDL_DetachThread(SDL_CreateThread(&thread_function, thread->name, &params));
     SDL_WaitSemaphore(params.host_may_destroy_params);
     SDL_DestroySemaphore(params.host_may_destroy_params);
 
@@ -169,18 +201,22 @@ ThreadStatePtr KernelState::create_thread(MemState &mem, const char *name, Ptr<c
 }
 
 Ptr<Ptr<void>> KernelState::get_thread_tls_addr(MemState &mem, SceUID thread_id, int key) {
-    Ptr<Ptr<void>> address(0);
-    // magic numbers taken from decompiled source. There is 0x400 unused bytes of unknown usage
-    if (key <= 0x100 && key >= 0) {
-        const ThreadStatePtr thread = get_thread(thread_id);
-        address = thread->tls.get_ptr<Ptr<void>>() + key;
-    } else {
-        LOG_ERROR("Wrong tls slot index. TID:{} index:{}", thread_id, key);
-    }
-    return address;
+    if (key < 0 || key >= SCE_KERNEL_TLS_KEY_COUNT)
+        return Ptr<Ptr<void>>();
+    const ThreadStateRef thread = get_thread(thread_id);
+    if (!thread)
+        return Ptr<Ptr<void>>();
+    return thread->tls.get_ptr<Ptr<void>>() + key;
 }
 
 void KernelState::request_process_exit(int res, std::optional<AppLaunchRequest> relaunch) {
+    {
+        const std::lock_guard<std::mutex> lock(mutex);
+        if (std::exchange(process_exiting, true))
+            return;
+        for (auto &[_, thread] : threads)
+            thread->remove();
+    }
     if (process_exit_callback)
         process_exit_callback(res, std::move(relaunch));
 }
@@ -188,49 +224,59 @@ void KernelState::request_process_exit(int res, std::optional<AppLaunchRequest> 
 void KernelState::process_exit() {
     {
         std::lock_guard<std::mutex> lock(mutex);
-        for (auto &[_, timer] : timers)
-            timer->condvar.notify_all();
+        process_exiting = true;
         for (auto &[_, thread] : threads)
-            thread->exit_delete(false);
+            thread->remove();
     }
 
     std::unique_lock<std::mutex> lock(mutex);
     thread_deleted_cond.wait(lock, [this] { return threads.empty(); });
 }
 
-void KernelState::pause_threads() {
-    const std::lock_guard<std::mutex> lock(mutex);
-    for (auto &[_, thread] : threads) {
-        paused_threads_status[thread->id] = thread->status;
-        if (thread->status == ThreadStatus::run)
-            thread->suspend();
-    }
+SceUID KernelState::register_thread_event_handler(ThreadEventHandlerRef handler) {
+    const std::lock_guard<std::mutex> lock(thread_event_handlers_mutex);
+    thread_event_handlers.push_back(handler);
+    return objects.add(std::move(handler), get_next_uid());
 }
 
-void KernelState::resume_threads() {
+bool KernelState::unregister_thread_event_handler(ThreadEventHandler &handler) {
+    const std::lock_guard<std::mutex> lock(thread_event_handlers_mutex);
+    if (!handler.linked())
+        return false;
+    handler.deleted = true;
+    if (handler.runs == 0)
+        thread_event_handlers.remove(handler);
+    return true;
+}
+
+void KernelState::set_threads_paused(bool paused) {
     const std::lock_guard<std::mutex> lock(mutex);
-    for (auto &[_, thread] : threads) {
-        if (paused_threads_status[thread->id] == ThreadStatus::run)
-            thread->resume();
-    }
-    paused_threads_status.clear();
+    if (threads_paused == paused)
+        return;
+    // Set before the threads see it, so a thread that checks its holds meanwhile already sees it
+    threads_paused = paused;
+    for (auto &[_, thread] : threads)
+        thread->pause_changed();
+}
+
+void KernelState::set_threads_suspended(bool suspended) {
+    const std::lock_guard<std::mutex> lock(mutex);
+    threads_suspended = suspended;
+    for (auto &[_, thread] : threads)
+        thread->set_suspended(suspended);
 }
 
 void KernelState::deinit(MemState &mem) {
     process_exit();
+    timers.stop();
     threads.clear();
 
-    simple_events.clear();
-    timers.clear();
-    semaphores.clear();
-    condvars.clear();
-    lwcondvars.clear();
-    mutexes.clear();
-    lwmutexes.clear();
-    rwlocks.clear();
-    eventflags.clear();
-    msgpipes.clear();
-    callbacks.clear();
+    {
+        const std::lock_guard<std::mutex> lock(thread_event_handlers_mutex);
+        while (!thread_event_handlers.empty())
+            thread_event_handlers.remove(*thread_event_handlers.begin());
+    }
+    objects.clear();
 
     loaded_modules.clear();
     loaded_sysmodules.clear();
@@ -239,6 +285,8 @@ void KernelState::deinit(MemState &mem) {
     {
         std::lock_guard<std::mutex> lock(export_nids_mutex);
         export_nids.clear();
+        export_nids_by_lib.clear();
+        export_nid_owners.clear();
         func_binding_infos.clear();
         var_binding_infos.clear();
         module_uid_by_nid.clear();
@@ -253,15 +301,9 @@ void KernelState::deinit(MemState &mem) {
     tls_psize = 0;
     tls_msize = 0;
 
-    thread_event_start = Ptr<const void>(0);
-    thread_event_start_arg = 0;
-    thread_event_end = Ptr<const void>(0);
-    thread_event_end_arg = 0;
-
     codec_blocks.clear();
 
     halt_instruction = nullptr;
-    halt_instruction_pc = 0;
 
     process_param = nullptr;
     client_vtable = Ptr<void>(0);
@@ -272,7 +314,8 @@ void KernelState::deinit(MemState &mem) {
 
     next_uid = 1;
 
-    paused_threads_status.clear();
+    threads_paused = false;
+    process_exiting = false;
 }
 
 SceKernelModuleInfo *KernelState::find_module_by_addr(Address address) {

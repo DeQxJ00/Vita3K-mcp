@@ -24,6 +24,8 @@
 
 #include <map>
 #include <mutex>
+#include <optional>
+#include <unordered_map>
 #include <vector>
 
 struct SceNpServiceStateCallback {
@@ -31,7 +33,7 @@ struct SceNpServiceStateCallback {
     Address data;
 };
 
-typedef std::map<int, SceNpServiceStateCallback> np_callbacks;
+using np_callbacks = std::map<int, SceNpServiceStateCallback>;
 
 struct NpTrophyUnlockCallbackData {
     std::string np_com_id;
@@ -70,11 +72,38 @@ enum SceNpServiceState : uint32_t {
     SCE_NP_SERVICE_STATE_ONLINE = 3
 };
 
+struct NpTusRequest {
+    SceInt32 title_context_id = 0;
+    std::optional<SceInt32> result;
+};
+
+struct NpTusState {
+    bool inited = false;
+    std::mutex access_mutex;
+    // Simulated handles and immediate TSS failures; no PSN authentication or storage.
+    std::unordered_map<SceUID, bool> title_contexts;
+    std::unordered_map<SceUID, NpTusRequest> requests;
+};
+
+struct NpAuthRequest {
+    Address ticket_cb = 0;
+    Address cb_arg = 0;
+    bool pending = true;
+};
+
+struct NpAuthState {
+    std::mutex access_mutex;
+    SceInt32 next_request_id = 1;
+    std::map<SceInt32, NpAuthRequest> requests;
+};
+
 struct NpState {
     bool inited = false;
     np_callbacks cbs;
     SceUID state_cb_id;
 
     NpTrophyState trophy_state;
+    NpTusState tus_state;
+    NpAuthState auth_state;
     np::CommunicationID comm_id;
 };

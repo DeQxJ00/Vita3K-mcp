@@ -16,17 +16,18 @@
 // 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 
 #pragma once
-#include <cpu/state.h>
+#include <cpu/arm.h>
 #include <mem/state.h>
 #include <mem/util.h>
 
 #include <map>
+#include <mutex>
 
 struct KernelState;
 
 struct Breakpoint {
     bool thumb_mode;
-    unsigned char data[4];
+    unsigned char data[sizeof(arm::ARM_BKPT)];
 };
 
 struct WatchMemory {
@@ -34,14 +35,13 @@ struct WatchMemory {
     size_t size;
 };
 
-typedef std::map<Address, WatchMemory> WatchMemoryAddrs;
-typedef std::map<Address, Breakpoint> Breakpoints;
+using WatchMemoryAddrs = std::map<Address, WatchMemory>;
+using Breakpoints = std::map<Address, Breakpoint>;
 
 struct Debugger {
     Debugger() = delete;
     explicit Debugger(KernelState &kernel);
 
-    bool wait_for_debugger = false;
     bool watch_import_calls = false;
     bool watch_code = false;
     bool watch_memory = false;

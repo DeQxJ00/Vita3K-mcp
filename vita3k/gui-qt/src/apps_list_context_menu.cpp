@@ -27,15 +27,12 @@
 #include <config/version.h>
 #include <emuenv/state.h>
 #include <io/state.h>
+#include <mem/util.h>
 #include <packages/license.h>
 #include <packages/sce_types.h>
 #include <renderer/state.h>
 #include <util/log.h>
-
-#include <include/cpu.h>
-#include <include/environment.h>
-
-#include <SDL3/SDL_cpuinfo.h>
+#include <util/sysinfo.h>
 
 #include <QApplication>
 #include <QClipboard>
@@ -49,11 +46,14 @@
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QScrollArea>
+#include <QSysInfo>
 #include <QUrl>
 #include <QVBoxLayout>
 
 #include <fmt/format.h>
 #include <pugixml.hpp>
+
+#include <cmath>
 
 static const char *ISSUES_URL = "https://github.com/Vita3K/compatibility/issues";
 
@@ -72,6 +72,10 @@ static QString compat_state_string(CompatibilityState state) {
 
 static QString url_encode(const QString &input) {
     return QString(input.toUtf8().toPercentEncoding());
+}
+
+static std::string url_encode(const std::string &input) {
+    return url_encode(QString::fromStdString(input)).toStdString();
 }
 
 static quint64 directory_size(const QString &path) {
@@ -119,6 +123,7 @@ void AppsListContextMenu::build_single(const app::AppEntry &app) {
     add_compat_actions(app);
     add_copy_info_actions(app);
     add_custom_config_actions(app);
+    add_cheat_actions(app);
     addSeparator();
     add_open_folder_actions(app);
     addSeparator();
@@ -135,6 +140,7 @@ AppsListContextMenu::AppPaths AppsListContextMenu::make_app_paths(const app::App
         .app = m_emuenv.vita_fs_path / "ux0/app" / app.path,
         .save_data = m_emuenv.vita_fs_path / "ux0/user" / m_emuenv.io.user_id / "savedata" / app.savedata,
         .patch = m_emuenv.shared_path / "patch" / title_id,
+        .cheats = m_emuenv.cheat_path,
         .addcont = m_emuenv.vita_fs_path / "ux0/addcont" / app.addcont,
         .license = m_emuenv.vita_fs_path / "ux0/license" / title_id,
         .shader_cache = m_emuenv.cache_path / "shaders" / title_id,
@@ -212,7 +218,7 @@ void AppsListContextMenu::add_compat_actions(const app::AppEntry &app) {
         connect(check, &QAction::triggered, this, [title_id, &app] {
             const std::string url = title_id.starts_with("PCS")
                 ? "https://vita3k.org/compatibility?g=" + title_id
-                : "https://github.com/Vita3K/homebrew-compatibility/issues?q=" + app.title;
+                : "https://github.com/Vita3K/homebrew-compatibility/issues?q=" + url_encode(app.title);
             QDesktopServices::openUrl(QUrl(QString::fromStdString(url)));
         });
     } else {
@@ -262,23 +268,21 @@ void AppsListContextMenu::add_compat_actions(const app::AppEntry &app) {
                     "- GPU: {}\n"
                     "- RAM: {} GB",
                     user ? user : "?",
-                    CppCommon::Environment::OSVersion(),
-                    CppCommon::CPU::Architecture(),
+                    QSysInfo::prettyProductName().toStdString(),
+                    util::get_system_info(),
                     gpu_name,
-                    SDL_GetSystemRAM() / 1000);
+                    std::lround(util::get_total_memory() / static_cast<float>(GiB(1))));
                 QApplication::clipboard()->setText(QString::fromStdString(summary));
             });
         } else {
             auto *create_report = compat_menu->addAction(tr("Create State Report"));
             connect(create_report, &QAction::triggered, this, [this, &app, title_id] {
-                const auto title = url_encode(QString::fromStdString(app.title));
-
                 const auto app_summary = fmt::format(
                     "%23 App summary%0A"
                     "- App name: {}%0A"
                     "- App serial: {}%0A"
                     "- App version: {}",
-                    app.title, title_id, app.app_ver);
+                    url_encode(app.title), title_id, app.app_ver);
 
                 const auto vita3k_summary = fmt::format(
                     "%23 Vita3K summary%0A"
@@ -305,11 +309,11 @@ void AppsListContextMenu::add_compat_actions(const app::AppEntry &app) {
                     "- CPU: {}%0A"
                     "- GPU: {}%0A"
                     "- RAM: {} GB",
-                    user ? user : "?",
-                    CppCommon::Environment::OSVersion(),
-                    CppCommon::CPU::Architecture(),
-                    gpu_name,
-                    SDL_GetSystemRAM() / 1000);
+                    url_encode(std::string(user ? user : "?")),
+                    url_encode(QSysInfo::prettyProductName().toStdString()),
+                    url_encode(util::get_system_info()),
+                    url_encode(gpu_name),
+                    std::lround(util::get_total_memory() / static_cast<float>(GiB(1))));
 
                 const auto rest = "%23 Issues%0A<!-- Summary of problems -->%0A%0A"
                                   "%23 Screenshots%0A![image](https://?)%0A%0A"
@@ -320,7 +324,7 @@ void AppsListContextMenu::add_compat_actions(const app::AppEntry &app) {
 
                 const auto url = fmt::format(
                     "{}/new?assignees=&labels=&projects=&template=1-ISSUE_TEMPLATE.md&title={} [{}]&body={}%0A%0A{}%0A%0A{}%0A%0A{}",
-                    ISSUES_URL, title.toStdString(), title_id,
+                    ISSUES_URL, url_encode(app.title), title_id,
                     app_summary, vita3k_summary, test_env, rest);
 
                 QDesktopServices::openUrl(QUrl(QString::fromStdString(url)));
@@ -390,6 +394,13 @@ void AppsListContextMenu::add_custom_config_actions(const app::AppEntry &app) {
     }
 }
 
+void AppsListContextMenu::add_cheat_actions(const app::AppEntry &app) {
+    auto *cheats = addAction(tr("Manage Cheats"));
+    connect(cheats, &QAction::triggered, this, [this, &app] {
+        emit manage_cheats_requested(app);
+    });
+}
+
 void AppsListContextMenu::add_open_folder_actions(const app::AppEntry &app) {
     auto *open_menu = addMenu(tr("Open Folder"));
 
@@ -409,6 +420,13 @@ void AppsListContextMenu::add_open_folder_actions(const app::AppEntry &app) {
         auto *a = open_menu->addAction(tr("Patch"));
         connect(a, &QAction::triggered, this, [this] {
             gui::utils::open_dir(m_paths.patch);
+        });
+    }
+
+    if (fs::exists(m_paths.cheats)) {
+        auto *a = open_menu->addAction(tr("Cheats"));
+        connect(a, &QAction::triggered, this, [this] {
+            gui::utils::open_dir(m_paths.cheats);
         });
     }
 

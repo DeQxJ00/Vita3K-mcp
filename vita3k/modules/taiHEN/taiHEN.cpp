@@ -17,13 +17,13 @@
 
 #include <module/module.h>
 
+#include <cpu/arm.h>
 #include <io/device.h>
 #include <io/vfs.h>
 #include <kernel/state.h>
 #include <mem/functions.h>
 #include <modules/module_parent.h>
 #include <nids/functions.h>
-#include <util/arm.h>
 #include <util/log.h>
 #include <util/tracy.h>
 
@@ -152,7 +152,6 @@ struct TaiHookUser {
 
 // Decode the target address from an LLE jump stub (MOVW+MOVT+BX r12)
 static Address decode_lle_stub_target(const uint32_t *stub) {
-    // MOVW r12, #imm16: encoded as (0xE30 << 20) | imm4:12 | reg << 12 | imm12
     uint32_t movw = stub[0];
     uint32_t movt = stub[1];
     uint16_t lo = ((movw >> 4) & 0xF000) | (movw & 0xFFF);
@@ -162,7 +161,29 @@ static Address decode_lle_stub_target(const uint32_t *stub) {
 
 // Check if a stub is an SVC (HLE) stub: svc #0; mov pc, lr; NID
 static bool is_svc_stub(const uint32_t *stub) {
-    return stub[0] == 0xef000000 && stub[1] == 0xe1a0f00e;
+    return stub[0] == arm::ARM_SVC && stub[1] == arm::ARM_MOV_PC_LR;
+}
+
+// A NID names a function, not a library, so prefer the library-keyed export when we know the library.
+static Address find_export_address(KernelState &kernel, uint32_t library_nid, uint32_t func_nid) {
+    if (library_nid) {
+        const auto lib_it = kernel.export_nids_by_lib.find(lib_export_key(library_nid, func_nid));
+        if (lib_it != kernel.export_nids_by_lib.end())
+            return lib_it->second;
+    }
+    const auto it = kernel.export_nids.find(func_nid);
+    return (it != kernel.export_nids.end()) ? it->second : 0;
+}
+
+// Imports resolve through export_nids_by_lib first, so a redirection must move every alias of the export.
+static void redirect_export(KernelState &kernel, uint32_t func_nid, Address from, Address to) {
+    const auto it = kernel.export_nids.find(func_nid);
+    if (it != kernel.export_nids.end() && it->second == from)
+        it->second = to;
+    for (auto &[key, address] : kernel.export_nids_by_lib) {
+        if (static_cast<uint32_t>(key) == func_nid && address == from)
+            address = to;
+    }
 }
 
 // Find the import stub address for a given NID within a specific module
@@ -191,7 +212,7 @@ static Address find_import_stub_in_module(EmuEnvState &emuenv, const char *modul
     }
 
     for (auto it = range.first; it != range.second; ++it) {
-        Address addr = it->second;
+        Address addr = it->second.entry_address;
         // Check if this stub address falls within the module's segments
         for (int seg = 0; seg < MODULE_INFO_NUM_SEGMENTS; seg++) {
             Address seg_start = mod->info.segments[seg].vaddr.address();
@@ -252,9 +273,9 @@ static SceUID create_hook(EmuEnvState &emuenv, TaihenState *state, SceUID thread
     hook_user->old = original_func; // Original function / trampoline
 
     // Patch the target to jump to hook_func
-    stub[0] = encode_arm_inst(INSTRUCTION_MOVW, (uint16_t)hook_func, 12);
-    stub[1] = encode_arm_inst(INSTRUCTION_MOVT, (uint16_t)(hook_func >> 16), 12);
-    stub[2] = encode_arm_inst(INSTRUCTION_BRANCH, 0, 12);
+    stub[0] = arm::encode_arm_inst(arm::Instruction::MOVW, static_cast<uint16_t>(hook_func), arm::REG_IP);
+    stub[1] = arm::encode_arm_inst(arm::Instruction::MOVT, static_cast<uint16_t>(hook_func >> 16), arm::REG_IP);
+    stub[2] = arm::encode_arm_inst(arm::Instruction::BRANCH, 0, arm::REG_IP);
 
     // Invalidate JIT cache
     emuenv.kernel.invalidate_jit_cache(target_addr, 12);
@@ -282,9 +303,9 @@ static SceUID create_hook(EmuEnvState &emuenv, TaihenState *state, SceUID thread
 
 // Write ARM MOVW/MOVT/BX R12 (12 bytes) for import stub patching
 static void write_arm_stub(uint32_t *dest, Address target) {
-    dest[0] = encode_arm_inst(INSTRUCTION_MOVW, (uint16_t)target, 12);
-    dest[1] = encode_arm_inst(INSTRUCTION_MOVT, (uint16_t)(target >> 16), 12);
-    dest[2] = encode_arm_inst(INSTRUCTION_BRANCH, 0, 12);
+    dest[0] = arm::encode_arm_inst(arm::Instruction::MOVW, static_cast<uint16_t>(target), arm::REG_IP);
+    dest[1] = arm::encode_arm_inst(arm::Instruction::MOVT, static_cast<uint16_t>(target >> 16), arm::REG_IP);
+    dest[2] = arm::encode_arm_inst(arm::Instruction::BRANCH, 0, arm::REG_IP);
 }
 
 // Create an inline hook using substitute's transform-dis for instruction relocation.
@@ -293,8 +314,8 @@ static void write_arm_stub(uint32_t *dest, Address target) {
 // Returns hook UID on success, TAI_ERROR_HOOK_ERROR if function can't be hooked.
 static SceUID create_inline_hook(EmuEnvState &emuenv, TaihenState *state, SceUID thread_id,
     Address func_addr, Address hook_func, uint32_t func_nid = 0) {
-    bool is_thumb = (func_addr & 1) != 0;
-    Address code_addr = func_addr & ~1u;
+    bool is_thumb = (func_addr & arm::THUMB_BIT) != 0;
+    Address code_addr = func_addr & ~arm::THUMB_BIT;
     const void *code_host = Ptr<const void>(code_addr).get(emuenv.mem);
 
     // Set up arch context
@@ -337,14 +358,14 @@ static SceUID create_inline_hook(EmuEnvState &emuenv, TaihenState *state, SceUID
     int copy_size = pc_patch_end - pc_patch_start;
 
     // Append jump back to rest of original function
-    uint_tptr dpc = is_thumb ? (pc_patch_end | 1) : pc_patch_end;
-    uint_tptr branch_pc = trampoline_addr + ((uint8_t *)rewritten_ptr - (uint8_t *)trampoline_host);
+    uint_tptr dpc = is_thumb ? (pc_patch_end | arm::THUMB_BIT) : pc_patch_end;
+    uint_tptr branch_pc = trampoline_addr + (reinterpret_cast<uint8_t *>(rewritten_ptr) - reinterpret_cast<uint8_t *>(trampoline_host));
     make_jump_patch(&rewritten_ptr, branch_pc, dpc, arch);
 
-    int trampoline_total = (uint8_t *)rewritten_ptr - (uint8_t *)trampoline_host;
+    int trampoline_total = reinterpret_cast<uint8_t *>(rewritten_ptr) - reinterpret_cast<uint8_t *>(trampoline_host);
 
     // For TAI_CONTINUE: trampoline address (with Thumb bit if needed)
-    Address trampoline_entry = is_thumb ? (trampoline_addr | 1) : trampoline_addr;
+    Address trampoline_entry = is_thumb ? (trampoline_addr | arm::THUMB_BIT) : trampoline_addr;
 
     // Allocate hook_user
     Address hook_user_addr = alloc(emuenv.mem, sizeof(TaiHookUser), "taihen_hook_user");
@@ -370,17 +391,15 @@ static SceUID create_inline_hook(EmuEnvState &emuenv, TaihenState *state, SceUID
     if (is_thumb)
         jp_arch.pc_low_bit = true;
     make_jump_patch(&jp, code_addr, hook_func, jp_arch);
-    int jp_size = (uint8_t *)jp - jump_buf;
+    int jp_size = reinterpret_cast<uint8_t *>(jp) - jump_buf;
 
     // Write jump patch to function start
     uint8_t *target = Ptr<uint8_t>(code_addr).get(emuenv.mem);
     memcpy(target, jump_buf, jp_size);
     // NOP remaining bytes in patch region
     if (is_thumb) {
-        for (int i = jp_size; i < copy_size; i += 2) {
-            target[i] = 0x00;
-            target[i + 1] = 0xBF; // Thumb NOP = 0xBF00
-        }
+        for (int i = jp_size; i < copy_size; i += sizeof(arm::THUMB_NOP))
+            memcpy(&target[i], &arm::THUMB_NOP, sizeof(arm::THUMB_NOP));
     }
 
     emuenv.kernel.invalidate_jit_cache(code_addr, copy_size);
@@ -413,8 +432,7 @@ static SceUID create_export_hook(EmuEnvState &emuenv, TaihenState *state, SceUID
     // Try inline hook first
     SceUID uid = create_inline_hook(emuenv, state, thread_id, original_addr, hook_func, func_nid);
     if (uid >= 0) {
-        // Update export_nids to point to hook
-        emuenv.kernel.export_nids[func_nid] = hook_func;
+        redirect_export(emuenv.kernel, func_nid, original_addr, hook_func);
         return uid;
     }
 
@@ -440,14 +458,13 @@ static SceUID create_export_hook(EmuEnvState &emuenv, TaihenState *state, SceUID
     hook_user->func = hook_func;
     hook_user->old = trampoline_addr;
 
-    // Update export_nids
-    emuenv.kernel.export_nids[func_nid] = hook_func;
+    redirect_export(emuenv.kernel, func_nid, original_addr, hook_func);
 
     // Patch all resolved import stubs for this NID
     int patched_count = 0;
     auto range = emuenv.kernel.func_binding_infos.equal_range(func_nid);
     for (auto it = range.first; it != range.second; ++it) {
-        Address stub_addr = it->second;
+        Address stub_addr = it->second.entry_address;
         uint32_t *stub = Ptr<uint32_t>(stub_addr).get(emuenv.mem);
         if (!is_svc_stub(stub)) {
             Address current = decode_lle_stub_target(stub);
@@ -501,10 +518,7 @@ EXPORT(SceUID, taiHookFunctionExportForUser, Ptr<uint32_t> p_hook, Ptr<void> arg
     Address export_addr = 0;
     {
         const std::lock_guard<std::mutex> guard(emuenv.kernel.export_nids_mutex);
-        auto it = emuenv.kernel.export_nids.find(func_nid);
-        if (it != emuenv.kernel.export_nids.end()) {
-            export_addr = it->second;
-        }
+        export_addr = find_export_address(emuenv.kernel, hargs->library_nid, func_nid);
     }
 
     if (!export_addr) {
@@ -606,7 +620,7 @@ EXPORT(SceUID, taiHookFunctionOffsetForUser, Ptr<uint32_t> p_hook, Ptr<void> arg
     }
     // Add Thumb bit if the thumb flag is set
     if (thumb)
-        target_addr |= 1;
+        target_addr |= arm::THUMB_BIT;
 
     const std::lock_guard<std::mutex> lock(state->mutex);
 
@@ -711,8 +725,8 @@ EXPORT(int, taiHookRelease, SceUID tai_uid, uint32_t hook_ref) {
         // Restore export_nids if we have a NID
         if (hook->func_nid != 0) {
             const std::lock_guard<std::mutex> guard(emuenv.kernel.export_nids_mutex);
-            Address original_addr = hook->target_addr | (hook->is_thumb ? 1 : 0);
-            emuenv.kernel.export_nids[hook->func_nid] = original_addr;
+            Address original_addr = hook->target_addr | (hook->is_thumb ? arm::THUMB_BIT : 0);
+            redirect_export(emuenv.kernel, hook->func_nid, hook->hook_func, original_addr);
         }
     } else if (hook->target_addr != 0) {
         // Import hook: restore original bytes at the patched stub
@@ -726,17 +740,17 @@ EXPORT(int, taiHookRelease, SceUID tai_uid, uint32_t hook_ref) {
             // Find the original address from the trampoline (it branches there)
             uint32_t *tramp = Ptr<uint32_t>(hook->trampoline).get(emuenv.mem);
             Address original_addr = decode_lle_stub_target(tramp);
-            emuenv.kernel.export_nids[hook->func_nid] = original_addr;
+            redirect_export(emuenv.kernel, hook->func_nid, hook->hook_func, original_addr);
 
             // Re-patch import stubs back to original
             auto range = emuenv.kernel.func_binding_infos.equal_range(hook->func_nid);
             for (auto bi = range.first; bi != range.second; ++bi) {
-                uint32_t *stub = Ptr<uint32_t>(bi->second).get(emuenv.mem);
+                uint32_t *stub = Ptr<uint32_t>(bi->second.entry_address).get(emuenv.mem);
                 if (!is_svc_stub(stub)) {
                     Address current = decode_lle_stub_target(stub);
                     if (current == hook->hook_func) {
                         write_arm_stub(stub, original_addr);
-                        emuenv.kernel.invalidate_jit_cache(bi->second, 12);
+                        emuenv.kernel.invalidate_jit_cache(bi->second.entry_address, 12);
                     }
                 }
             }
@@ -872,9 +886,8 @@ EXPORT(int, taiGetModuleExportFunc, const char *modname, uint32_t libnid, uint32
     // Search runtime export_nids
     {
         const std::lock_guard<std::mutex> guard(emuenv.kernel.export_nids_mutex);
-        auto it = emuenv.kernel.export_nids.find(funcnid);
-        if (it != emuenv.kernel.export_nids.end()) {
-            *func.get(emuenv.mem) = it->second;
+        if (const Address addr = find_export_address(emuenv.kernel, libnid, funcnid)) {
+            *func.get(emuenv.mem) = addr;
             return 0;
         }
     }
@@ -1004,10 +1017,7 @@ EXPORT(SceUID, taiHookFunctionExportForKernel, SceUID pid, Ptr<uint32_t> p_hook,
     Address export_addr = 0;
     {
         const std::lock_guard<std::mutex> guard(emuenv.kernel.export_nids_mutex);
-        auto it = emuenv.kernel.export_nids.find(func_nid);
-        if (it != emuenv.kernel.export_nids.end()) {
-            export_addr = it->second;
-        }
+        export_addr = find_export_address(emuenv.kernel, library_nid, func_nid);
     }
 
     if (!export_addr) {
@@ -1090,7 +1100,7 @@ EXPORT(SceUID, taiHookFunctionOffsetForKernel, SceUID pid, Ptr<uint32_t> p_hook,
 
         target_addr = mod.segments[segidx].vaddr.address() + offset;
     }
-    target_addr &= ~1u; // Clear thumb bit
+    target_addr &= ~arm::THUMB_BIT;
 
     const std::lock_guard<std::mutex> lock(state->mutex);
     SceUID uid = create_hook(emuenv, state, thread_id, target_addr, hook_func.address());
@@ -1206,9 +1216,8 @@ EXPORT(int, module_get_export_func, SceUID pid, const char *modname, uint32_t li
     // First, check runtime export_nids (LLE exports and previously created dynamic stubs)
     {
         const std::lock_guard<std::mutex> guard(emuenv.kernel.export_nids_mutex);
-        auto it = emuenv.kernel.export_nids.find(funcnid);
-        if (it != emuenv.kernel.export_nids.end()) {
-            *func.get(emuenv.mem) = it->second;
+        if (const Address addr = find_export_address(emuenv.kernel, libnid, funcnid)) {
+            *func.get(emuenv.mem) = addr;
             return 0;
         }
     }
@@ -1228,8 +1237,8 @@ EXPORT(int, module_get_export_func, SceUID pid, const char *modname, uint32_t li
         }
 
         uint32_t *stub = Ptr<uint32_t>(stub_addr).get(emuenv.mem);
-        stub[0] = 0xef000000; // svc #0
-        stub[1] = 0xe1a0f00e; // mov pc, lr
+        stub[0] = arm::ARM_SVC;
+        stub[1] = arm::ARM_MOV_PC_LR;
         stub[2] = funcnid; // NID for dispatch
 
         // Register in export_nids so future lookups find it directly
@@ -1297,21 +1306,25 @@ static void register_hle_override(EmuEnvState &emuenv, uint32_t nid) {
     }
 
     uint32_t *stub = Ptr<uint32_t>(stub_addr).get(mem);
-    stub[0] = 0xef000000; // svc #0
-    stub[1] = 0xe1a0f00e; // mov pc, lr
+    stub[0] = arm::ARM_SVC;
+    stub[1] = arm::ARM_MOV_PC_LR;
     stub[2] = nid;
 
-    // Overwrite (or insert) the export_nids entry
+    // Imports resolve through export_nids_by_lib first, so move every alias to the stub too.
+    const Address lle_addr = kernel.export_nids[nid];
     kernel.export_nids[nid] = stub_addr;
+    redirect_export(kernel, nid, lle_addr, stub_addr);
+    // The stub outlives the plugin module, so the plain entry stops belonging to its library.
+    kernel.export_nid_owners.erase(nid);
 
     // Re-patch any existing import stubs that already point to kubridge's ARM code
     auto range = kernel.func_binding_infos.equal_range(nid);
     for (auto it = range.first; it != range.second; ++it) {
-        auto address = it->second;
+        const Address address = it->second.entry_address;
         uint32_t *caller_stub = Ptr<uint32_t>(address).get(mem);
-        caller_stub[0] = encode_arm_inst(INSTRUCTION_MOVW, (uint16_t)stub_addr, 12);
-        caller_stub[1] = encode_arm_inst(INSTRUCTION_MOVT, (uint16_t)(stub_addr >> 16), 12);
-        caller_stub[2] = encode_arm_inst(INSTRUCTION_BRANCH, 0, 12);
+        caller_stub[0] = arm::encode_arm_inst(arm::Instruction::MOVW, static_cast<uint16_t>(stub_addr), arm::REG_IP);
+        caller_stub[1] = arm::encode_arm_inst(arm::Instruction::MOVT, static_cast<uint16_t>(stub_addr >> 16), arm::REG_IP);
+        caller_stub[2] = arm::encode_arm_inst(arm::Instruction::BRANCH, 0, arm::REG_IP);
         kernel.invalidate_jit_cache(address, 3 * sizeof(uint32_t));
     }
 

@@ -24,16 +24,20 @@
 #include <codecvt>
 #include <locale>
 #include <ranges>
+#include <type_traits>
 
 namespace string_utils {
 
+// wchar_t is 16-bit UTF-16 on Windows, where code points above U+FFFF need a surrogate pair
+using WideCodecvt = std::conditional_t<sizeof(wchar_t) == 2, std::codecvt_utf8_utf16<wchar_t>, std::codecvt_utf8<wchar_t>>;
+
 std::wstring utf_to_wide(const std::string &str) {
-    std::wstring_convert<std::codecvt_utf8<wchar_t>> myconv;
+    std::wstring_convert<WideCodecvt> myconv;
     return myconv.from_bytes(str);
 }
 
 std::string wide_to_utf(const std::wstring &str) {
-    std::wstring_convert<std::codecvt_utf8<wchar_t>> myconv;
+    std::wstring_convert<WideCodecvt> myconv;
     return myconv.to_bytes(str);
 }
 
@@ -131,14 +135,25 @@ std::string tolower(std::string s) {
     return s;
 }
 
-int stoi_def(const std::string &str, int default_value, const char *name) {
-    try {
-        return std::stoi(str);
-    } catch (std::invalid_argument &_) {
-        LOG_ERROR("Invalid {}: \"{}\"", name, str);
-    } catch (std::out_of_range &_) {
+int stoi_def(std::string_view str, int default_value, const char *name) {
+    // std::from_chars accepts neither the leading blanks nor the '+' std::stoi used to skip
+    const auto first_digit = str.find_first_not_of(" \t\n\v\f\r");
+    if (first_digit != std::string_view::npos)
+        str.remove_prefix(first_digit);
+    if (str.starts_with('+'))
+        str.remove_prefix(1);
+
+    int value = 0;
+    const auto [_, ec] = std::from_chars(str.data(), str.data() + str.size(), value);
+
+    if (ec == std::errc{})
+        return value;
+
+    if (ec == std::errc::result_out_of_range)
         LOG_ERROR("Out of range {}: \"{}\"", name, str);
-    }
+    else
+        LOG_ERROR("Invalid {}: \"{}\"", name, str);
+
     return default_value;
 }
 

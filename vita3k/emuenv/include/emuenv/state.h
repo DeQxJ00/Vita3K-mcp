@@ -44,6 +44,7 @@ struct State;
 };
 
 struct Config;
+struct CheatState;
 struct CompatState;
 struct MemState;
 struct CtrlState;
@@ -71,13 +72,13 @@ namespace overlay {
 class display_manager;
 }
 
-typedef float SceFloat;
+using SceFloat = float;
 struct FVector2 {
     SceFloat x;
     SceFloat y;
 };
 
-typedef int SceUID;
+using SceUID = int;
 
 using NIDSet = std::set<uint32_t>;
 
@@ -114,8 +115,12 @@ private:
     std::unique_ptr<HTTPState> _http;
     std::unique_ptr<CameraState> _camera;
     std::unique_ptr<CompatState> _compat;
+    std::unique_ptr<CheatState> _cheat;
     mutable std::mutex _launch_request_mutex;
     std::optional<AppLaunchRequest> _pending_launch_request;
+    // The URI the running app was launched with, until sceAppMgrGetAppParam takes it
+    mutable std::mutex _launch_uri_mutex;
+    std::optional<std::string> _launch_uri;
 
 public:
     // App info contained in its `param.sfo` file
@@ -132,6 +137,7 @@ public:
     fs::path static_assets_path{}; // Path for static assets (shaders, icons, etc)
     fs::path shared_path{}; // Path for files (UI themes, textures, etc)
     fs::path patch_path{}; // Path for patch files
+    fs::path cheat_path{}; // Path for cheat files
     std::string self_name{};
     std::string self_path{};
     Config &cfg;
@@ -175,6 +181,7 @@ public:
     HTTPState &http;
     CameraState &camera;
     CompatState &compat;
+    CheatState &cheat;
     int max_font_level = 0;
     int current_font_level = 0;
 
@@ -200,10 +207,27 @@ public:
         _pending_launch_request.reset();
     }
 
+    void set_launch_uri(std::string uri) {
+        std::scoped_lock lock(_launch_uri_mutex);
+        _launch_uri = std::move(uri);
+    }
+
+    // Returns the launch URI to the first caller only
+    std::optional<std::string> take_launch_uri() {
+        std::scoped_lock lock(_launch_uri_mutex);
+        return std::exchange(_launch_uri, std::nullopt);
+    }
+
+    void clear_launch_uri() {
+        std::scoped_lock lock(_launch_uri_mutex);
+        _launch_uri.reset();
+    }
+
     Root get_root_paths() const {
         Root r;
         r.set_vita_fs_path(vita_fs_path);
         r.set_patch_path(patch_path);
+        r.set_cheat_path(cheat_path);
         r.set_log_path(log_path);
         r.set_config_path(config_path);
         r.set_shared_path(shared_path);

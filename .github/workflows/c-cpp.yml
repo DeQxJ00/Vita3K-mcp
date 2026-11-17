@@ -12,6 +12,8 @@ env:
   BUILD_CONFIG: Release
   QT_VERSION: '6.11.0'
   SCCACHE_GHA_ENABLED: "true"
+  # The VitaAutotests commit to test with. Bump it to pick up new tests.
+  AUTOTESTS_REF: f26fbfc0e9e8055cf2dcbe690c93c6af03d2aa97
 
 jobs:
   desktop-build:
@@ -22,27 +24,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            runs_on: ubuntu-latest
-            platform: linux-x64
-            arch: x86_64
-            cmake_preset: ci-linux-clang-appimage
-            linuxdeploy_command: /usr/local/bin/linuxdeploy-x86_64.AppImage
-            cache_path: ''
-            qt_install_deps: 'true'
-
-          - os: ubuntu-24.04-arm
-            runs_on: ubuntu-24.04-arm
-            platform: linux-arm64
+          - platform: linux-arm64
+            runs_on: ubuntu-26.04-arm
             arch: aarch64
             cmake_preset: ci-linux-clang-appimage
-            linuxdeploy_command: /usr/local/bin/linuxdeploy-aarch64.AppImage
             cache_path: ''
             qt_install_deps: 'true'
 
-          - os: windows-latest
+          - platform: windows-x64
             runs_on: windows-latest
-            platform: windows-x64
             arch: x86_64
             cmake_preset: ci-windows-msvc
             vcpkg_root: C:\vcpkg
@@ -50,29 +40,26 @@ jobs:
             cache_path: C:\vcpkg-binary-cache
             qt_install_deps: 'false'
 
-          - os: windows-11-arm
+          - platform: windows-arm64
             runs_on: windows-11-arm
-            platform: windows-arm64
             cmake_preset: ci-windows-msys2-clang
             msys2_env: CLANGARM64
             cache_path: C:\msys2-ccache
             qt_install_deps: 'false'
 
-          - os: macos-intel
-            platform: macos-x64
+          - platform: macos-x64
             runs_on: macos-latest
             cmake_preset: ci-macos-x64
             cache_path: ~/Library/Caches/ccache
             qt_install_deps: 'false'
 
-          - os: macos-arm64
-            platform: macos-arm64
+          - platform: macos-arm64
             runs_on: macos-latest
             cmake_preset: ci-macos-arm64
             cache_path: ~/Library/Caches/ccache
             qt_install_deps: 'false'
 
-    steps:
+    steps: &desktop-build-steps
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -88,7 +75,7 @@ jobs:
             cache-${{ matrix.platform }}-${{ env.BUILD_CONFIG }}-
 
       - name: Set up build environment (Linux)
-        run: bash ./.ci/setup-linux.sh ${{ matrix.arch }} with-appimage
+        run: bash ./.ci/setup-linux.sh
         if: startsWith(matrix.platform, 'linux-')
 
       - name: Set up build environment (macOS)
@@ -99,9 +86,9 @@ jobs:
         shell: pwsh
         env:
           VCPKG_ROOT: ${{ matrix.vcpkg_root }}
-          VCPKG_BINARY_CACHE: ${{ matrix.cache_path }}
+          VCPKG_DEFAULT_BINARY_CACHE: ${{ matrix.cache_path }}
         run: |
-          New-Item -ItemType Directory -Force -Path $env:VCPKG_BINARY_CACHE | Out-Null
+          New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
           .\.ci\setup-windows-msvc.ps1 -VcpkgTriplet '${{ matrix.vcpkg_triplet }}'
         if: matrix.platform == 'windows-x64'
 
@@ -110,7 +97,7 @@ jobs:
           arch: ${{ matrix.arch }}
         if: matrix.platform == 'windows-x64'
 
-      - uses: mozilla-actions/sccache-action@v0.0.10
+      - uses: mozilla-actions/sccache-action@v0.0.11
         if: startsWith(matrix.platform, 'linux-') || matrix.platform == 'windows-x64'
         with:
           disable_annotations: true
@@ -166,16 +153,18 @@ jobs:
           install-deps: ${{ matrix.qt_install_deps }}
 
       - name: Build desktop target (Linux/macOS)
-        env:
-          VITA3K_LINUXDEPLOY_COMMAND: ${{ matrix.linuxdeploy_command }}
         run: bash ./.ci/build-desktop.sh --preset ${{ matrix.cmake_preset }} --config ${{ env.BUILD_CONFIG }}
         if: startsWith(matrix.platform, 'linux-') || startsWith(matrix.platform, 'macos-')
+
+      - name: Package Linux AppImage with Anylinux
+        run: bash ./.ci/package-appimage.sh --preset ${{ matrix.cmake_preset }} --config ${{ env.BUILD_CONFIG }}
+        if: startsWith(matrix.platform, 'linux-')
 
       - name: Build desktop target (Windows MSVC)
         shell: bash
         env:
           VCPKG_ROOT: ${{ matrix.vcpkg_root }}
-          VCPKG_BINARY_CACHE: ${{ matrix.cache_path }}
+          VCPKG_DEFAULT_BINARY_CACHE: ${{ matrix.cache_path }}
         run: bash ./.ci/build-desktop.sh --preset ${{ matrix.cmake_preset }} --config ${{ env.BUILD_CONFIG }}
         if: matrix.platform == 'windows-x64'
 
@@ -219,11 +208,77 @@ jobs:
           name: ${{ env.ARTIFACT_NAME }}
           path: ${{ env.ARTIFACT_DIR }}
 
+  # The desktop build of Linux x64 on its own, so the autotests start as soon as it is done
+  linux-x64-build:
+    name: Desktop (${{ matrix.platform }})
+    runs-on: ${{ matrix.runs_on }}
+
+    strategy:
+      matrix:
+        include:
+          - platform: linux-x64
+            runs_on: ubuntu-26.04
+            arch: x86_64
+            cmake_preset: ci-linux-clang-appimage
+            cache_path: ''
+            qt_install_deps: 'true'
+
+    steps: *desktop-build-steps
+
+  autotests:
+    name: VitaAutotests (linux-x64)
+    # Its own job, so a runner lost during the tests doesn't fail the build, and a rerun of the tests
+    # doesn't build again
+    needs: linux-x64-build
+    runs-on: ubuntu-26.04
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up the Linux environment
+        run: bash ./.ci/setup-linux.sh
+
+      # lavapipe, Mesa's CPU Vulkan driver, and pytest with pytest-xdist for run.py
+      - name: Install the autotests' dependencies
+        run: sudo apt-get -y install mesa-vulkan-drivers python3-pytest python3-pytest-xdist
+
+      - name: Install Qt 6.11.0
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          modules: qtmultimedia
+          cache: true
+          install-deps: 'true'
+
+      # By pattern, since the build names it with the short commit hash of a full clone
+      - name: Download the Linux x64 build
+        uses: actions/download-artifact@v8
+        with:
+          pattern: vita3k-*-linux-x64
+          merge-multiple: true
+          path: vita3k
+
+      - name: Check out the autotests
+        uses: actions/checkout@v7
+        with:
+          repository: Vita3K/VitaAutotests
+          ref: ${{ env.AUTOTESTS_REF }}
+          path: autotests
+
+      - name: Build the autotests
+        run: bash ./.ci/build-autotests.sh autotests
+
+      # An artifact doesn't keep the executable bit
+      - name: Run the autotests
+        run: |
+          chmod +x vita3k/bin/Vita3K
+          bash ./.ci/run-autotests.sh vita3k/bin/Vita3K autotests
+
   android-build:
     name: Android
     runs-on: ubuntu-latest
     env:
-      VCPKG_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-binary-cache
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-binary-cache
 
     steps:
       - uses: actions/checkout@v7
@@ -234,13 +289,13 @@ jobs:
       - name: Restore vcpkg binary cache
         uses: actions/cache@v6
         with:
-          path: ${{ env.VCPKG_BINARY_CACHE }}
-          key: vcpkg-bincache-android-${{ hashFiles('vcpkg.json', 'CMakeLists.txt', 'cmake/**', '.ci/**', 'android/app/build.gradle') }}
+          path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+          key: vcpkg-bincache-android-${{ hashFiles('vcpkg.json', 'CMakeLists.txt', 'cmake/**', '.ci/**', 'android/app/build.gradle', '.github/workflows/c-cpp.yml') }}
           restore-keys: |
             vcpkg-bincache-android-
 
       - name: Set up Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'
@@ -254,15 +309,17 @@ jobs:
 
       - name: Set up Android SDK tools
         uses: android-actions/setup-android@v4
+        with:
+          packages: ''
 
       - name: Set up Android build environment
         env:
           VCPKG_ROOT: /usr/local/share/vcpkg
         run: |
-          mkdir -p "$VCPKG_BINARY_CACHE"
+          mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
           bash ./.ci/setup-android.sh
 
-      - uses: hendrikmuhs/ccache-action@v1.2.23
+      - uses: hendrikmuhs/ccache-action@v1.2.24
 
       - name: Decode Android keystore
         env:
@@ -299,7 +356,7 @@ jobs:
           path: ${{ env.ARTIFACT_DIR }}
 
   create-release:
-    needs: [desktop-build, android-build]
+    needs: [desktop-build, linux-x64-build, android-build]
     runs-on: ubuntu-latest
     concurrency:
       group: create-release

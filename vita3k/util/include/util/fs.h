@@ -17,17 +17,42 @@
 
 #pragma once
 
-#include <boost/filesystem.hpp>
-#include <boost/filesystem/fstream.hpp>
 #include <fmt/format.h>
-#include <fmt/ostream.h>
+#include <fmt/std.h>
+
+// Boost.Filesystem used to pull in these headers, and a lot of code relies on that
+#include <atomic>
+#include <cassert>
+#include <cerrno>
+#include <climits>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ctime>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <iterator>
+#include <limits>
+#include <list>
+#include <memory>
+#include <mutex>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #define fseek _fseeki64
 #define ftell _ftelli64
 #endif
 
-namespace fs = boost::filesystem;
+namespace fs = std::filesystem;
 
 #ifdef _WIN32
 #define FOPEN(filename, params) _wfopen(filename, L##params)
@@ -43,26 +68,30 @@ namespace fs_utils {
  * \param  folder_path The sub-directory/sub-directories to output to.
  * \param  file_name   The name of the file.
  * \param  extension   The extension of the file (optional)
- * \return A complete Boost.Filesystem file path normalized.
+ * \return A complete file path normalized.
  */
+fs::path generic_path(const fs::path &path);
+
+std::time_t to_time_t(fs::file_time_type time);
+
 fs::path construct_file_name(const fs::path &base_path, const fs::path &folder_path, const fs::path &file_name, const fs::path &extension = "");
 
 /**
- * \brief Convert a Boost.Filesystem path to a UTF-8 string.
+ * \brief Convert a path to a UTF-8 string.
  * \param path path to convert
  * \return UTF-8 string
  */
 std::string path_to_utf8(const fs::path &path);
 
 /**
- * \brief Convert a UTF-8 string to a Boost.Filesystem path.
+ * \brief Convert a UTF-8 string to a path.
  * \param str UTF-8 string to convert
- * \return Boost.Filesystem path
+ * \return path
  */
 fs::path utf8_to_path(const std::string &str);
 
 /**
- * \brief Concatenate two Boost.Filesystem paths. Usable to add extension to path.
+ * \brief Concatenate two paths. Usable to add extension to path.
  * \param path1 First path
  * \param path2 Second path
  * \return First path + second path
@@ -75,7 +104,7 @@ fs::path path_concat(const fs::path &path1, const fs::path &path2);
  * \param data pointer to data buffer
  * \param size size of data buffer in bytes
  */
-void dump_data(const fs::path &path, const void *data, const std::streamsize size);
+bool dump_data(const fs::path &path, const void *data, const std::streamsize size);
 
 bool read_data(const fs::path &path, std::vector<uint8_t> &data);
 bool read_data(const fs::path &path, std::vector<int8_t> &data);
@@ -84,12 +113,10 @@ bool copy_directory_contents(const fs::path &src_path, const fs::path &dst_path,
 
 } // namespace fs_utils
 
-template <>
-struct fmt::formatter<boost::filesystem::path> : ostream_formatter {};
-
 class Root {
     fs::path vita_fs_path;
     fs::path patch_path;
+    fs::path cheat_path;
     fs::path log_path;
     fs::path config_path;
     fs::path shared_path;
@@ -109,6 +136,13 @@ public:
     }
     fs::path get_patch_path() const {
         return patch_path;
+    }
+
+    void set_cheat_path(const fs::path &p) {
+        cheat_path = p;
+    }
+    fs::path get_cheat_path() const {
+        return cheat_path;
     }
 
     void set_log_path(const fs::path &p) {
