@@ -1,4 +1,7 @@
+import { readFile } from 'node:fs/promises';
 import { McpServer, type CallToolResult } from '@modelcontextprotocol/server';
+import jpeg from 'jpeg-js';
+import { PNG } from 'pngjs';
 import * as z from 'zod/v4';
 import { BuildManager, type BuildConfiguration } from './build-manager.js';
 import { errorPayload } from './errors.js';
@@ -105,20 +108,22 @@ function registerTools(server: McpServer): void {
 
   server.registerTool('capture_screen', {
     title: 'Capture the Vita display',
-    description: 'Capture the current emulated frame as PNG, archive it in the session directory, and return it as image content.',
-    inputSchema: z.object({ sessionId: z.string().uuid() }),
+    description: 'Save the current emulated frame as a local PNG and return its path and dimensions. Set includeImage to true only when you need a compressed JPEG in the tool response.',
+    inputSchema: z.object({
+      sessionId: z.string().uuid(),
+      includeImage: z.boolean().default(false).describe('Attach a JPEG to the MCP response. Leave false for routine captures.'),
+    }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-  }, async ({ sessionId }) => {
+  }, async ({ sessionId, includeImage }) => {
     try {
       const capture = await runtime.capture(sessionId);
-      const metadata = { ok: true, path: capture.path, width: capture.width, height: capture.height, mimeType: 'image/png' };
-      return {
-        content: [
-          { type: 'text', text: JSON.stringify(metadata, null, 2) },
-          { type: 'image', data: capture.data, mimeType: 'image/png' },
-        ],
-        structuredContent: metadata,
-      };
+      const result = success({ ok: true, ...capture, mimeType: 'image/png' });
+      if (includeImage) {
+        const frame = PNG.sync.read(await readFile(capture.path));
+        const { data } = jpeg.encode(frame, 75);
+        result.content.push({ type: 'image', data: data.toString('base64'), mimeType: 'image/jpeg' });
+      }
+      return result;
     } catch (error) { return failure(error); }
   });
 
@@ -190,7 +195,7 @@ export function createServer(): McpServer {
   const server = new McpServer(
     { name: 'vita3k-codex', version: '0.1.0' },
     {
-      instructions: 'Use build_start/build_status after C++ changes. Call list_apps before choosing a Title ID. For interactive tests: launch_app, wait with session_status until running, capture_screen, send one bounded input/touch action, then capture again and inspect get_logs. Stop or shut down when finished. Only launch content the user placed in scope; tests may modify game saves.',
+      instructions: 'Use build_start/build_status after C++ changes. Call list_apps before choosing a Title ID. For interactive tests, launch_app and wait with session_status until running. Use capture_screen with its default options to archive frames locally. Set includeImage=true only when you need to inspect a particular frame visually. Send bounded input/touch actions and inspect get_logs. Stop or shut down when finished. Only launch content the user placed in scope; tests may modify game saves.',
     },
   );
   registerTools(server);

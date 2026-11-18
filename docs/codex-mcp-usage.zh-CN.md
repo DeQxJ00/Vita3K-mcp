@@ -117,13 +117,13 @@ codex mcp list
 ### 启动并截图
 
 ```text
-使用 vita3k MCP 启动 Title ID 为 PCSG00776 的应用。等待 session_status 显示 running 且 frameReady=true，然后截图并告诉我当前画面。不要自动输入。
+使用 vita3k MCP 启动我指定的应用。等 session_status 显示 running 且 frameReady=true，再调用 capture_screen 并设置 includeImage=true，告诉我当前画面。不要自动输入。
 ```
 
 ### 交互测试
 
 ```text
-使用 vita3k MCP 启动 PCSG00776。每次输入前先截图确认当前页面；一次只发送一个有限时长输入，输入后再次截图并检查 error 级别日志。测试结束后停止应用并关闭模拟器。
+使用 vita3k MCP 启动我指定的应用。需要根据画面决定下一步时，调用 capture_screen 并设置 includeImage=true。一次只发送一个有限时长输入。留档截图使用默认设置，输入后检查 error 级别日志。测试结束后停止应用并关闭模拟器。
 ```
 
 ### 构建源码
@@ -203,7 +203,7 @@ resolution.height > 0
 
 ### `capture_screen`
 
-参数只有 `sessionId`。返回 MCP image content、PNG 路径、宽度和高度。截图直接来自模拟器当前帧，不依赖窗口是否被其他窗口遮挡。
+必填参数为 `sessionId`。默认将当前帧保存为本地 PNG，只返回路径、尺寸和格式。需要在 Codex 中看图时，传入 `includeImage: true`，响应会附带压缩后的 JPEG，本地文件仍是原始 PNG。连续截图请保持默认设置。截图直接来自模拟器当前帧，不依赖窗口是否被其他窗口遮挡。
 
 ### `send_input`
 

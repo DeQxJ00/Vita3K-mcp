@@ -72,7 +72,7 @@ try {
     if (status?.phase !== 'running' || status.frameReady !== true) throw new Error(`Application did not reach a capturable running state: ${status?.phase ?? 'unknown'}`);
     await new Promise((resolve) => setTimeout(resolve, 20));
     await call('control_session', { sessionId, action: 'pause' });
-    const captureResult = await callRaw('capture_screen', { sessionId });
+    const captureResult = await callRaw('capture_screen', { sessionId, includeImage: true });
     const capture = captureResult.structuredContent ?? {};
     if (!captureResult.content.some((item) => item.type === 'image')) throw new Error('capture_screen did not return MCP image content.');
     console.log(JSON.stringify(capture, null, 2));

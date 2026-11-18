@@ -26,7 +26,7 @@ test('fake Vita3K supports launch, status, screen, input, logs and shutdown', as
     await runtime.sendInput(session.id, { buttons: ['cross'] }, 1);
     await runtime.touch(session.id, 'front', [{ x: 0.5, y: 0.5 }], 1);
     const capture = await runtime.capture(session.id);
-    assert.equal(capture.width, 1);
+    assert.deepEqual(capture, { path: capture.path, width: 1, height: 1 });
     assert.ok(existsSync(capture.path));
     assert.ok(path.isAbsolute(capture.path));
     assert.equal((await runtime.control('pause', session.id)).accepted, true);

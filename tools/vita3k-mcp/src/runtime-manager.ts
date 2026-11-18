@@ -1,7 +1,7 @@
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { ArtifactStore, type SessionPhase, type SessionRecord } from './artifact-store.js';
 import { BridgeClient } from './bridge-client.js';
@@ -126,7 +126,7 @@ export class RuntimeManager {
     return this.snapshot(session, {});
   }
 
-  async capture(sessionId: string): Promise<{ data: string; path: string; width: number; height: number }> {
+  async capture(sessionId: string): Promise<{ path: string; width: number; height: number }> {
     const session = this.requireSession(sessionId);
     if (!this.bridge || !['running', 'paused'].includes(session.phase)) throw new Vita3kError('NO_ACTIVE_SESSION', 'A running or paused application is required for capture.');
     await this.waitForFrame(session);
@@ -139,9 +139,9 @@ export class RuntimeManager {
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
     if (result.captured === false) throw new Vita3kError('FRAME_NOT_READY', 'The rendered frame could not be read within 30 seconds.', true);
-    const data = await readFile(target.absolute);
+    await stat(target.absolute);
     await this.artifacts.recordScreenshot(session);
-    return { data: data.toString('base64'), path: target.absolute, width: Number(result.width ?? 0), height: Number(result.height ?? 0) };
+    return { path: target.absolute, width: Number(result.width ?? 0), height: Number(result.height ?? 0) };
   }
 
   async sendInput(sessionId: string, input: Record<string, unknown>, durationMs: number): Promise<void> {
