@@ -233,6 +233,10 @@ l1 r1 l2 r2 l3 r3
 左摇杆向右推 1 秒：leftStick={x:1,y:0}, durationMs=1000
 ```
 
+### `send_text`
+
+先在游戏里打开 Vita 的文字输入框，再传入 `sessionId` 和单行 `text`，例如 `{ "sessionId": "...", "text": "玩家一号" }`。支持中、日、英文等 Unicode 文字，内容插入在光标处。输入框未打开或剩余字数不足时会报错，输入后仍需在游戏里确认。需要同时使用支持文字输入的 Vita3K 和 MCP。
+
 ### `touch`
 
 | 参数 | 类型 | 默认值 | 说明 |

@@ -33,7 +33,7 @@ test('loopback HTTP host validates browser origin and serves the complete MCP wo
     const tools = await client.listTools();
     assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
       'build_start', 'build_status', 'capture_screen', 'control_session', 'get_logs',
-      'launch_app', 'list_apps', 'send_input', 'session_status', 'touch',
+      'launch_app', 'list_apps', 'send_input', 'send_text', 'session_status', 'touch',
     ]);
     assert.deepEqual(errors, []);
   } finally {

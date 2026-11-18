@@ -145,6 +145,24 @@ function registerTools(server: McpServer): void {
     } catch (error) { return failure(error); }
   });
 
+  server.registerTool('send_text', {
+    title: 'Type into the active Vita input field',
+    description: 'Insert Unicode text at the cursor in the game’s open Vita text input field. Open the field before calling this tool. The text is not submitted automatically.',
+    inputSchema: z.object({
+      sessionId: z.string().uuid(),
+      text: z.string().min(1).max(4096).refine(
+        (text) => text.isWellFormed() && !/[\p{Cc}\p{Zl}\p{Zp}]/u.test(text),
+        'Expected single-line Unicode text without control characters.',
+      ),
+    }),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  }, async ({ sessionId, text }) => {
+    try {
+      const result = await runtime.sendText(sessionId, text);
+      return success({ ok: true, sessionId, ...result });
+    } catch (error) { return failure(error); }
+  });
+
   server.registerTool('touch', {
     title: 'Send Vita touch input',
     description: 'Tap or drag on the front or rear Vita touch surface using normalized 0..1 coordinates, then always release.',

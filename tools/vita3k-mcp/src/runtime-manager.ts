@@ -154,6 +154,16 @@ export class RuntimeManager {
     }
   }
 
+  async sendText(sessionId: string, text: string): Promise<{ inserted: boolean; utf16Units: number }> {
+    this.requireRunningSession(sessionId);
+    if (!this.bridge) throw new Vita3kError('PIPE_DISCONNECTED', 'Vita3K control pipe is disconnected.', true);
+    const result = await this.bridge.request('input.text', { text });
+    if (result.inserted !== true || result.utf16Units !== text.length) {
+      throw new Vita3kError('BRIDGE_ERROR', 'Vita3K did not confirm text insertion. Use an MCP-enabled build with text input support.');
+    }
+    return { inserted: true, utf16Units: text.length };
+  }
+
   async touch(sessionId: string, port: 'front' | 'rear', points: Array<{ x: number; y: number }>, durationMs: number): Promise<void> {
     this.requireRunningSession(sessionId);
     const step = points.length > 1 ? Math.max(1, Math.floor(durationMs / (points.length - 1))) : durationMs;

@@ -10,8 +10,10 @@
 #include <archive.h>
 #include <ctrl/ctrl.h>
 #include <ctrl/state.h>
+#include <dialog/state.h>
 #include <display/state.h>
 #include <emuenv/state.h>
+#include <ime/functions.h>
 #include <interface.h>
 #include <io/state.h>
 #include <packages/sfo.h>
@@ -259,6 +261,29 @@ QJsonObject AutomationServer::dispatch(const QString &method, const QJsonObject 
         input.buttons_ext = mapped->buttons_ext;
         std::copy(mapped->axes.begin(), mapped->axes.end(), input.axes);
         return { { QStringLiteral("applied"), true } };
+    }
+    if (method == QStringLiteral("input.text")) {
+        const QString text = params.value(QStringLiteral("text")).toString();
+        if (text.isEmpty() || text.size() > 4096 || !text.isValidUtf16()
+            || std::ranges::any_of(text, [](QChar character) {
+                   const auto category = character.category();
+                   return category == QChar::Other_Control || category == QChar::Separator_Line || category == QChar::Separator_Paragraph;
+               }))
+            throw std::runtime_error("Expected 1 to 4096 UTF-16 code units of single-line text without control characters.");
+        if (!m_window.m_app_session.is_running())
+            throw std::runtime_error("A running application is required for text input.");
+
+        auto &ime = m_emuenv.ime;
+        std::scoped_lock lock(m_emuenv.common_dialog.mutex, ime.mutex);
+        if (!is_any_ime_active(m_emuenv))
+            throw std::runtime_error("No Vita text input field is open.");
+
+        const auto committed_length = ime.str.size() - ime.edit_text.preeditLength;
+        if (committed_length + static_cast<size_t>(text.size()) > ime.param.maxTextLength)
+            throw std::runtime_error("The text exceeds the remaining length of the Vita input field.");
+
+        ime_commit_text(ime, text.toStdU16String());
+        return { { QStringLiteral("inserted"), true }, { QStringLiteral("utf16Units"), static_cast<int>(text.size()) } };
     }
     if (method == QStringLiteral("input.clear")) {
         clearInjectedInput();

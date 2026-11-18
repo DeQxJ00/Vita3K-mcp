@@ -18,7 +18,7 @@ test('stdio MCP server advertises the complete Vita3K test workflow', async () =
     const tools = await client.listTools();
     assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
       'build_start', 'build_status', 'capture_screen', 'control_session', 'get_logs',
-      'launch_app', 'list_apps', 'send_input', 'session_status', 'touch',
+      'launch_app', 'list_apps', 'send_input', 'send_text', 'session_status', 'touch',
     ]);
     for (const name of ['send_input', 'touch']) {
       const tool = tools.tools.find((candidate) => candidate.name === name);

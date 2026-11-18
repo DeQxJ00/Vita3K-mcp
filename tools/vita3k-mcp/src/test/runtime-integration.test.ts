@@ -19,11 +19,12 @@ test('fake Vita3K supports launch, status, screen, input, logs and shutdown', as
   try {
     const apps = await runtime.listApps();
     assert.equal(apps[0]?.titleId, 'FAKE00001');
-    const session = await runtime.launch({ titleId: 'FAKE00001', appArgs: [], replace: false });
+    const session = await runtime.launch({ titleId: 'FAKE00001', appArgs: ['--ime'], replace: false });
     artifactDirectory = session.directory;
     const status = await runtime.status(session.id, undefined, 1_000);
     assert.equal(status.phase, 'running');
     await runtime.sendInput(session.id, { buttons: ['cross'] }, 1);
+    assert.deepEqual(await runtime.sendText(session.id, '中文かなABC😀'), { inserted: true, utf16Units: 9 });
     await runtime.touch(session.id, 'front', [{ x: 0.5, y: 0.5 }], 1);
     const capture = await runtime.capture(session.id);
     assert.deepEqual(capture, { path: capture.path, width: 1, height: 1 });
@@ -87,6 +88,7 @@ test('capture waits for the first valid application frame', async () => {
   try {
     const session = await runtime.launch({ titleId: 'FAKE00001', appArgs: ['--delay-frame'], replace: false });
     await runtime.status(session.id);
+    await assert.rejects(runtime.sendText(session.id, 'text'), { code: 'BRIDGE_ERROR', message: 'No Vita text input field is open.' });
     const startedAt = Date.now();
     const capture = await runtime.capture(session.id);
     assert.ok(Date.now() - startedAt >= 150);

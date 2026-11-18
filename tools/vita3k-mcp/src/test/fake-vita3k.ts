@@ -12,6 +12,7 @@ const endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\${pipeName}` : pip
 let phase = 'idle';
 let titleId = '';
 let frameReadyAt = 0;
+let imeActive = false;
 
 // A valid 1x1 transparent PNG.
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M/wHwAF/gL+Xx8WAAAAAElFTkSuQmCC', 'base64');
@@ -43,6 +44,7 @@ const server = net.createServer((socket) => {
         titleId = String(params.titleId ?? 'FAKE00001');
         phase = 'running';
         const appArgs = params.appArgs as string[] | undefined;
+        imeActive = appArgs?.includes('--ime') ?? false;
         frameReadyAt = appArgs?.includes('--delay-frame') ? Date.now() + 250 : 0;
         if (appArgs?.includes('--crash')) setTimeout(() => process.exit(9), 80);
         if (appArgs?.includes('--fail')) phase = 'failed';
@@ -65,6 +67,13 @@ const server = net.createServer((socket) => {
         await mkdir(path.dirname(target), { recursive: true });
         await writeFile(target, png);
         result = { width: 1, height: 1 };
+      } else if (request.method === 'input.text') {
+        if (!imeActive) {
+          socket.write(JSON.stringify({ id: request.id, ok: false, error: { code: 'BRIDGE_ERROR', message: 'No Vita text input field is open.' } }) + '\n');
+          continue;
+        }
+        if (typeof params.text !== 'string') throw new Error('Expected a text string');
+        result = { inserted: true, utf16Units: params.text.length };
       } else if (request.method === 'emulator.shutdown') setTimeout(() => process.exit(0), 20);
       socket.write(JSON.stringify({ id: request.id, ok: true, result }) + '\n');
     }
