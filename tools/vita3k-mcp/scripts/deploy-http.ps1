@@ -4,7 +4,8 @@ param(
     [string]$DestinationRoot,
     [string]$SourceRoot,
     [ValidateRange(1, 65535)]
-    [int]$Port = 32560
+    [int]$Port = 32560,
+    [switch]$Portable
 )
 
 $ErrorActionPreference = 'Stop'
@@ -72,8 +73,11 @@ if (Test-Path -LiteralPath $obsoleteTokenPath -PathType Leaf) {
 $configuration = [ordered]@{
     host = '127.0.0.1'
     port = $Port
-    executable = $vita3kExecutable
-    sourceRoot = $SourceRoot
+    executable = 'Vita3K.exe'
+}
+if (-not $Portable) {
+    $configuration.executable = $vita3kExecutable
+    $configuration.sourceRoot = $SourceRoot
 }
 [System.IO.File]::WriteAllText(
     (Join-Path $configTarget 'mcp-config.json'),

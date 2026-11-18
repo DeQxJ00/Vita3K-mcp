@@ -16,6 +16,14 @@ foreach ($required in @($configPath, $nodePath, $entryPath)) {
 }
 
 $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+$installRoot = Split-Path -Parent $mcpRoot
+$executable = [string]$config.executable
+if (-not [System.IO.Path]::IsPathRooted($executable)) {
+    $executable = Join-Path $installRoot $executable
+}
+if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
+    throw "Vita3K executable was not found: $executable"
+}
 $healthUrl = "http://$($config.host):$($config.port)/health"
 
 try {
@@ -31,12 +39,12 @@ try {
 New-Item -ItemType Directory -Path $logsPath -Force | Out-Null
 $env:VITA3K_MCP_HTTP_HOST = [string]$config.host
 $env:VITA3K_MCP_HTTP_PORT = [string]$config.port
-$env:VITA3K_EXECUTABLE = [string]$config.executable
-$env:VITA3K_MCP_REPO_ROOT = [string]$config.sourceRoot
+$env:VITA3K_EXECUTABLE = $executable
+$env:VITA3K_MCP_REPO_ROOT = if ($config.sourceRoot) { [string]$config.sourceRoot } else { $installRoot }
 $env:VITA3K_MCP_TOOL_ROOT = Join-Path $mcpRoot '.tools'
 $env:VITA3K_MCP_STATE_ROOT = Join-Path $mcpRoot '.vita3k-mcp'
 
-$process = Start-Process -FilePath $nodePath -ArgumentList @($entryPath) `
+$process = Start-Process -FilePath $nodePath -ArgumentList ('"{0}"' -f $entryPath) `
     -WorkingDirectory (Join-Path $mcpRoot 'server') -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput (Join-Path $logsPath 'http-host.stdout.log') `
     -RedirectStandardError (Join-Path $logsPath 'http-host.stderr.log')

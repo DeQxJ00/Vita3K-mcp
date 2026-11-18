@@ -3,28 +3,20 @@ name: Codex MCP Windows validation
 on:
   workflow_dispatch:
   push:
-    paths:
-      - '.codex/**'
-      - '.github/workflows/mcp-sidecar.yml'
-      - 'tools/vita3k-mcp/**'
-      - 'CMakeLists.txt'
-      - 'external/CMakeLists.txt'
-      - 'vita3k/app/**'
-      - 'vita3k/ctrl/**'
-      - 'vita3k/gui-qt/**'
-      - 'vita3k/interface.cpp'
-      - 'vita3k/interface.h'
+    branches:
+      - 'codex/vita3k-mcp'
   pull_request:
     paths:
       - '.codex/**'
+      - '.github/workflows/mcp-sidecar.yml'
+      - '.gitmodules'
       - 'tools/vita3k-mcp/**'
       - 'CMakeLists.txt'
-      - 'external/CMakeLists.txt'
-      - 'vita3k/app/**'
-      - 'vita3k/ctrl/**'
-      - 'vita3k/gui-qt/**'
-      - 'vita3k/interface.cpp'
-      - 'vita3k/interface.h'
+      - 'CMakePresets.json'
+      - 'external/**'
+      - 'vita3k/**'
+      - 'data/**'
+      - 'i18n/qt/**'
 
 permissions:
   contents: read
@@ -45,36 +37,97 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+          persist-credentials: false
 
       - name: Provision portable Node in the repository
         shell: pwsh
         run: |
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/vita3k-mcp/scripts/ensure-toolchain.ps1 -RepoRoot $env:GITHUB_WORKSPACE -Components Node
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (!(Test-Path -LiteralPath '.tools/node/node.exe' -PathType Leaf)) { throw 'Portable Node was not produced.' }
           (Join-Path $env:GITHUB_WORKSPACE '.tools\node') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install sidecar dependencies locally
         working-directory: tools/vita3k-mcp
-        run: npm ci
+        run: npm.cmd ci --no-audit --no-fund
 
       - name: Run TypeScript and fake-pipe integration tests
         working-directory: tools/vita3k-mcp
-        run: npm test
+        run: npm.cmd test
 
       - name: Build Vita3K through the repository-local toolchain
-        working-directory: tools/vita3k-mcp
-        run: npm run ci:build
-
-      - name: Verify generated executable
         shell: pwsh
         run: |
-          $binary = Get-ChildItem -LiteralPath build/windows-vs2022 -Filter Vita3K.exe -File -Recurse | Select-Object -First 1
-          if (-not $binary) { throw 'Vita3K.exe was not produced.' }
-          Write-Host $binary.FullName
+          New-Item -ItemType Directory -Path build/ci-logs -Force | Out-Null
+          npm.cmd --prefix tools/vita3k-mcp run ci:build 2>&1 | Tee-Object -FilePath build/ci-logs/windows-build.log
+          exit $LASTEXITCODE
+
+      - name: Stage the portable Windows package
+        shell: pwsh
+        run: |
+          $binaryDir = Join-Path $env:GITHUB_WORKSPACE 'build/windows-vs2022/bin/RelWithDebInfo'
+          $package = Join-Path $env:GITHUB_WORKSPACE 'build/portable/Vita3K MCP'
+          New-Item -ItemType Directory -Path $package | Out-Null
+          foreach ($item in @('Vita3K.exe', 'COPYING.txt', 'data', 'icons', 'plugins', 'shaders-builtin', 'translations')) {
+            Copy-Item -LiteralPath (Join-Path $binaryDir $item) -Destination $package -Recurse
+          }
+          Get-ChildItem -LiteralPath $binaryDir -Filter '*.dll' -File | Copy-Item -Destination $package
+          & ./tools/vita3k-mcp/scripts/deploy-http.ps1 -DestinationRoot $package -Portable
+
+      - name: Smoke test the packaged HTTP MCP
+        shell: pwsh
+        working-directory: tools/vita3k-mcp
+        run: |
+          $mcp = Join-Path $env:GITHUB_WORKSPACE 'build/portable/Vita3K MCP/mcp'
+          try {
+            & (Join-Path $mcp 'Start-MCP.cmd')
+            if ($LASTEXITCODE -ne 0) { throw 'The packaged MCP failed to start.' }
+            @'
+          import assert from 'node:assert/strict';
+          import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+          const client = new Client({ name: 'vita3k-package-smoke', version: '1.0.0' });
+          try {
+            await client.connect(new StreamableHTTPClientTransport(new URL('http://127.0.0.1:32560/mcp')));
+            const { tools } = await client.listTools();
+            assert.ok(tools.some(({ name }) => name === 'touch'));
+            const capture = tools.find(({ name }) => name === 'capture_screen');
+            assert.equal(capture?.inputSchema.properties.includeImage.default, false);
+          } finally {
+            await client.close();
+          }
+          '@ | & (Join-Path $mcp 'runtime/node.exe') --input-type=module
+            if ($LASTEXITCODE -ne 0) { throw 'The packaged MCP failed the HTTP smoke test.' }
+          } finally {
+            & (Join-Path $mcp 'Stop-MCP.cmd')
+            if ($LASTEXITCODE -ne 0) { throw 'The packaged MCP failed to stop.' }
+          }
 
       - name: Upload runnable Vita3K package
         uses: actions/upload-artifact@v4
+        id: windows-package
         with:
           name: vita3k-mcp-windows-${{ github.sha }}
-          path: build/windows-vs2022/bin/RelWithDebInfo/
+          path: |
+            build/portable/Vita3K MCP/
+            !build/portable/Vita3K MCP/mcp/logs/**
           if-no-files-found: error
+          retention-days: 3
+
+      - name: Link the package in the run summary
+        shell: pwsh
+        env:
+          PACKAGE_URL: ${{ steps.windows-package.outputs.artifact-url }}
+        run: |
+          Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "[Download Vita3K and its portable HTTP MCP]($env:PACKAGE_URL)"
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vita3k-mcp-windows-logs-${{ github.sha }}
+          path: |
+            build/ci-logs/
+            build/windows-vs2022/Testing/Temporary/LastTest.log
+            build/portable/Vita3K MCP/mcp/logs/
+          if-no-files-found: ignore
           retention-days: 3

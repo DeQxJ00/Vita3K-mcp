@@ -92,6 +92,9 @@ export class BuildManager {
 
   private async run(job: BuildJob, reconfigure: boolean): Promise<void> {
     try {
+      if (!existsSync(path.join(repoRoot, 'CMakeLists.txt'))) {
+        throw new Vita3kError('MISSING_SOURCE', 'Building Vita3K requires a source checkout. Set sourceRoot in the portable MCP configuration to the checkout path.');
+      }
       const msvcEnv = await this.requireMsvc(job);
       await this.requireDiskSpace();
       const ensureScript = path.join(serverRoot, 'scripts', 'ensure-toolchain.ps1');

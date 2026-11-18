@@ -6,6 +6,8 @@ This MCP server offers both repository-local STDIO and loopback-only Streamable 
 
 ## Portable HTTP deployment
 
+The [Windows MCP workflow](https://github.com/DeQxJ00/Vita3K-mcp/actions/workflows/mcp-sidecar.yml) builds Vita3K and uploads a package with portable Node and the HTTP MCP dependencies. Download the artifact, extract it, and run `mcp\Start-MCP.cmd`. The package can be moved to a different directory. To use `build_start` from the package, set `sourceRoot` in `mcp/config/mcp-config.json` to a Vita3K source checkout.
+
 Deploy the compiled server, portable Node 24, production dependencies, logs, and run artifacts beside an MCP-enabled `Vita3K.exe`:
 
 ```powershell
